@@ -30,6 +30,11 @@ from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
+from sregym.generators.noise.impl.cpu_noisy_neighbor import (
+    CPU_NOISE_PROFILES,
+    DEFAULT_CPU_WORKERS,
+    DEFAULT_DURATION_SECONDS,
+)
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, get_profile, set_profile
@@ -844,7 +849,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     set_profile(args.profile)
 
     if args.noise:
-        logger.info("Noise injection enabled.")
+        logger.info("Noise injection enabled (profile=%s).", args.noise_profile or "random-chaos")
     os.environ["API_HOSTNAME"] = "0.0.0.0"
     # Host-facing ports are defaults, not constants: a run has to be able to
     # step around whatever else is already listening on the workstation.
@@ -894,6 +899,9 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     conductor_config = ConductorConfig(
         deploy_loki=not args.use_external_harness,
         enable_noise=args.noise,
+        noise_profile=args.noise_profile,
+        noise_cpu_workers=args.noise_cpu_workers,
+        noise_duration_seconds=args.noise_duration_seconds,
         internet_policy=internet_policy,
         k8s_proxy_listen_host=k8s_proxy_listen_host,
         k8s_proxy_listen_port=int(os.environ.get("K8S_PROXY_PORT", "16443")),
@@ -1086,7 +1094,25 @@ if __name__ == "__main__":
     parser.add_argument(
         "--noise",
         action="store_true",
-        help="Enable transient noise injection via Chaos Mesh during problem runs",
+        help="Enable transient noise injection during problem runs",
+    )
+    parser.add_argument(
+        "--noise-profile",
+        choices=CPU_NOISE_PROFILES,
+        default=None,
+        help="Select one deterministic noise profile; requires --noise (default: random Chaos Mesh noise)",
+    )
+    parser.add_argument(
+        "--noise-cpu-workers",
+        type=int,
+        default=DEFAULT_CPU_WORKERS,
+        help=f"CPU workers used by the cpu-noisy-neighbor profile (default: {DEFAULT_CPU_WORKERS})",
+    )
+    parser.add_argument(
+        "--noise-duration-seconds",
+        type=int,
+        default=DEFAULT_DURATION_SECONDS,
+        help=(f"Duration used by the cpu-noisy-neighbor profile in seconds (default: {DEFAULT_DURATION_SECONDS})"),
     )
     parser.add_argument(
         "--internet-access",
@@ -1133,5 +1159,11 @@ if __name__ == "__main__":
         parser.error("--n-attempts must be a positive integer")
     if args.use_external_harness and args.suite:
         parser.error("--use-external-harness cannot be used with --suite; use --problem instead")
+    if args.noise_profile and not args.noise:
+        parser.error("--noise-profile requires --noise")
+    if args.noise_cpu_workers < 1:
+        parser.error("--noise-cpu-workers must be a positive integer")
+    if args.noise_duration_seconds < 1:
+        parser.error("--noise-duration-seconds must be a positive integer")
 
     main(args)

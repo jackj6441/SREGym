@@ -1,8 +1,8 @@
 """
-NoiseManager — schedules transient Chaos Mesh experiments to simulate
-real-world system noise (CI/CD churn, transient network blips, etc.).
+NoiseManager — schedules transient Kubernetes workloads or Chaos Mesh
+experiments to simulate real-world system noise.
 
-No MCP coupling: noise is injected as real Kubernetes CRDs, not by
+No MCP coupling: noise is injected as real Kubernetes resources, not by
 intercepting tool responses.
 """
 
@@ -21,6 +21,12 @@ from typing import Any
 import yaml
 
 from sregym.generators.noise.catalog import EXPERIMENT_CATALOG
+from sregym.generators.noise.impl.cpu_noisy_neighbor import (
+    CPU_NOISY_NEIGHBOR_PROFILE,
+    DEFAULT_CPU_WORKERS,
+    DEFAULT_DURATION_SECONDS,
+    CpuNoisyNeighbor,
+)
 from sregym.service.kubectl import KubeCtl
 
 logger = logging.getLogger(__name__)
@@ -33,7 +39,7 @@ COOLDOWN = 300  # seconds between injection cycles
 
 
 class NoiseManager:
-    """Singleton that manages Chaos Mesh noise experiments."""
+    """Singleton that manages deterministic profiles and random chaos noise."""
 
     _instance = None
 
@@ -52,7 +58,12 @@ class NoiseManager:
         self.running = False
         self.current_stage: str | None = None
         self.target_namespace: str | None = None
+        self.target_service: str | None = None
+        self.noise_profile: str | None = None
+        self.cpu_workers = DEFAULT_CPU_WORKERS
+        self.duration_seconds = DEFAULT_DURATION_SECONDS
         self.active_experiments: list[dict[str, str]] = []
+        self.active_workloads: list[dict[str, str]] = []
         self._background_thread: threading.Thread | None = None
         self._last_injection_time: float = 0
         self._lock = threading.Lock()
@@ -66,6 +77,10 @@ class NoiseManager:
 
     def set_problem_context(self, context: dict[str, Any]):
         self.target_namespace = context.get("namespace")
+        self.target_service = context.get("target_service")
+        self.noise_profile = context.get("noise_profile")
+        self.cpu_workers = context.get("noise_cpu_workers", DEFAULT_CPU_WORKERS)
+        self.duration_seconds = context.get("noise_duration_seconds", DEFAULT_DURATION_SECONDS)
         logger.info(f"Noise target namespace: {self.target_namespace}")
 
     # ── Lifecycle ─────────────────────────────────────────────────────
@@ -74,25 +89,44 @@ class NoiseManager:
         """Start the background noise injection loop."""
         if self.running:
             return
-        self._ensure_chaos_mesh_installed()
-        if not self._chaos_mesh_ready:
-            logger.warning("Chaos Mesh is not ready; noise will not be injected.")
-            return
-        self.running = True
+
+        if self.noise_profile == CPU_NOISY_NEIGHBOR_PROFILE:
+            # A selected profile is deterministic and must be active before the
+            # agent starts. Surface failures instead of silently running a
+            # benchmark that was labelled as noisy but received no noise.
+            self.running = True
+            try:
+                self._maybe_inject()
+            except Exception:
+                self.running = False
+                self._cleanup_workloads()
+                raise
+        elif self.noise_profile is None:
+            self._ensure_chaos_mesh_installed()
+            if not self._chaos_mesh_ready:
+                logger.warning("Chaos Mesh is not ready; noise will not be injected.")
+                return
+            self.running = True
+        else:
+            raise ValueError(f"Unknown noise profile: {self.noise_profile}")
+
         self._background_thread = threading.Thread(target=self._background_loop, daemon=True)
         self._background_thread.start()
         logger.info("Noise injection started.")
 
     def stop(self):
         """Stop the background loop and clean up all active experiments."""
-        self.running = False
+        with self._lock:
+            self.running = False
         if self._background_thread:
             self._background_thread.join(timeout=5)
             self._background_thread = None
+        self._cleanup_workloads()
         self._cleanup_experiments()
         # Strip finalizers from any remaining chaos-mesh CRs so the namespace
         # can terminate cleanly when reconcile_to_baseline deletes it.
-        self._force_remove_all_chaos_resources()
+        if self.noise_profile is None:
+            self._force_remove_all_chaos_resources()
         self._last_injection_time = 0
         logger.info("Noise injection stopped.")
 
@@ -114,11 +148,38 @@ class NoiseManager:
         if now - self._last_injection_time < COOLDOWN:
             return
 
-        n = min(MAX_CONCURRENT, len(EXPERIMENT_CATALOG))
-        selected = random.sample(EXPERIMENT_CATALOG, n)
+        if self.noise_profile == CPU_NOISY_NEIGHBOR_PROFILE:
+            if not self.target_service:
+                raise RuntimeError("The CPU noisy neighbor profile requires a target service")
+            self._cleanup_workloads()
+            injector = CpuNoisyNeighbor(self.kubectl)
+            resource = injector.inject(
+                namespace=self.target_namespace,
+                target_deployment=self.target_service,
+                cpu_workers=self.cpu_workers,
+                duration_seconds=self.duration_seconds,
+            )
+            with self._lock:
+                still_running = self.running
+                if still_running:
+                    self.active_workloads.append(resource)
+            if not still_running:
+                # stop() may time out waiting for an in-flight Kubernetes API
+                # call. The late creator owns its result and removes it here.
+                injector.delete(resource)
+                return
+            logger.info(
+                "Started workload %s/%s on %s",
+                resource["namespace"],
+                resource["name"],
+                resource["node"],
+            )
+        else:
+            n = min(MAX_CONCURRENT, len(EXPERIMENT_CATALOG))
+            selected = random.sample(EXPERIMENT_CATALOG, n)
 
-        for template in selected:
-            self._apply_experiment(template)
+            for template in selected:
+                self._apply_experiment(template)
 
         self._last_injection_time = now
 
@@ -174,6 +235,25 @@ class NoiseManager:
                 d[k] = v.format(target_namespace=target_namespace, duration=duration)
 
     # ── Cleanup ───────────────────────────────────────────────────────
+
+    def _cleanup_workloads(self):
+        with self._lock:
+            active = self.active_workloads
+            self.active_workloads = []
+
+        remaining = []
+        injector = CpuNoisyNeighbor(self.kubectl)
+        for resource in active:
+            try:
+                injector.delete(resource)
+                logger.info(f"Cleaned up workload {resource['namespace']}/{resource['name']}")
+            except Exception as e:
+                logger.error(f"Failed to clean up workload {resource['namespace']}/{resource['name']}: {e}")
+                remaining.append(resource)
+
+        if remaining:
+            with self._lock:
+                self.active_workloads.extend(remaining)
 
     def _cleanup_experiments(self):
         with self._lock:
