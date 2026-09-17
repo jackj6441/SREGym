@@ -732,6 +732,24 @@ def test_late_noise_restart_is_stopped_after_attempt_is_abandoned(monkeypatch):
     assert conductor.submission_stage == "aborted"
 
 
+def test_selected_noise_profile_restart_failure_is_surfaced(monkeypatch):
+    class FakeNoiseManager:
+        def stop(self):
+            return None
+
+        def start(self):
+            raise RuntimeError("timechaos unavailable")
+
+    conductor = _conductor(diagnosis_evaluation=lambda _solution: {"success": True})
+    conductor.config = SimpleNamespace(enable_noise=True, noise_profile="clock-skew")
+    monkeypatch.setattr(conductor_module, "get_noise_manager", FakeNoiseManager)
+
+    with pytest.raises(RuntimeError, match="Selected noise profile failed to restart"):
+        conductor._submit_evaluate_and_advance("diagnosis", conductor.stage_sequence[0], 1)
+
+    assert conductor.submission_stage == "diagnosis"
+
+
 def test_incomplete_attempt_records_missing_stages_and_agent_exit():
     conductor = _conductor()
     conductor.results["Diagnosis"] = {"success": True}

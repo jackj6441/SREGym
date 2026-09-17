@@ -30,6 +30,7 @@ from sregym.conductor.submission import (
 from sregym.conductor.utils import is_ordered_subset
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
+from sregym.generators.noise.impl.clock_skew import DEFAULT_DURATION_SECONDS
 from sregym.generators.noise.manager import get_noise_manager
 from sregym.observer.jaeger import Jaeger
 from sregym.observer.otel_collector import OtelCollector
@@ -60,6 +61,8 @@ class ConductorConfig:
 
     deploy_loki: bool = True
     enable_noise: bool = False
+    noise_profile: str | None = None
+    noise_duration_seconds: int = DEFAULT_DURATION_SECONDS
     internet_policy: InternetPolicy = field(default_factory=InternetPolicy)
     k8s_proxy_listen_host: str = "127.0.0.1"
     k8s_proxy_listen_port: int = 16443
@@ -684,12 +687,16 @@ class Conductor:
                 context = {
                     "namespace": self.app.namespace,
                     "app_name": self.app.name,
-                    # We can add more info here if needed, e.g. service list
+                    "target_deployment": getattr(self.app, "frontend_service", None),
+                    "noise_profile": self.config.noise_profile,
+                    "noise_duration_seconds": self.config.noise_duration_seconds,
                 }
                 nm.set_problem_context(context)
                 nm.start()
             except Exception as e:
                 self.logger.warning(f"Failed to update NoiseManager context: {e}")
+                if self.config.noise_profile is not None:
+                    raise
 
         # After deployment, advance to the first stage
         self._advance_to_next_stage(start_index=0)
@@ -781,6 +788,11 @@ class Conductor:
                         nm.set_stage(next_stage_name)
                 except Exception as e:
                     self.logger.warning(f"Failed to restart NoiseManager: {e}")
+                    if getattr(self.config, "noise_profile", None) is not None:
+                        if nm is not None:
+                            with contextlib.suppress(Exception):
+                                nm.stop()
+                        raise RuntimeError("Selected noise profile failed to restart for the next stage") from e
 
                 # A slow start/set_stage can finish after the driver abandons
                 # the evaluator and performs its global noise stop. Stop again

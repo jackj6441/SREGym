@@ -30,6 +30,7 @@ from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
+from sregym.generators.noise.impl.clock_skew import DEFAULT_DURATION_SECONDS, NOISE_PROFILES
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, get_profile, set_profile
@@ -894,6 +895,8 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     conductor_config = ConductorConfig(
         deploy_loki=not args.use_external_harness,
         enable_noise=args.noise,
+        noise_profile=args.noise_profile,
+        noise_duration_seconds=args.noise_duration_seconds,
         internet_policy=internet_policy,
         k8s_proxy_listen_host=k8s_proxy_listen_host,
         k8s_proxy_listen_port=int(os.environ.get("K8S_PROXY_PORT", "16443")),
@@ -1089,6 +1092,18 @@ if __name__ == "__main__":
         help="Enable transient noise injection via Chaos Mesh during problem runs",
     )
     parser.add_argument(
+        "--noise-profile",
+        choices=NOISE_PROFILES,
+        default=None,
+        help="Select one deterministic noise profile; requires --noise (default: random Chaos Mesh noise)",
+    )
+    parser.add_argument(
+        "--noise-duration-seconds",
+        type=int,
+        default=DEFAULT_DURATION_SECONDS,
+        help=f"Duration used by deterministic noise profiles in seconds (default: {DEFAULT_DURATION_SECONDS})",
+    )
+    parser.add_argument(
         "--internet-access",
         choices=("filtered", "open"),
         default="filtered",
@@ -1133,5 +1148,9 @@ if __name__ == "__main__":
         parser.error("--n-attempts must be a positive integer")
     if args.use_external_harness and args.suite:
         parser.error("--use-external-harness cannot be used with --suite; use --problem instead")
+    if args.noise_profile and not args.noise:
+        parser.error("--noise-profile requires --noise")
+    if args.noise_duration_seconds < 1:
+        parser.error("--noise-duration-seconds must be a positive integer")
 
     main(args)

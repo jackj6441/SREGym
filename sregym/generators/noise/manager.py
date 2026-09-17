@@ -21,6 +21,11 @@ from typing import Any
 import yaml
 
 from sregym.generators.noise.catalog import EXPERIMENT_CATALOG
+from sregym.generators.noise.impl.clock_skew import (
+    CLOCK_SKEW_PROFILE,
+    DEFAULT_DURATION_SECONDS,
+    ClockSkewObserver,
+)
 from sregym.service.kubectl import KubeCtl
 
 logger = logging.getLogger(__name__)
@@ -33,7 +38,7 @@ COOLDOWN = 300  # seconds between injection cycles
 
 
 class NoiseManager:
-    """Singleton that manages Chaos Mesh noise experiments."""
+    """Singleton that manages deterministic profiles and random chaos noise."""
 
     _instance = None
 
@@ -52,7 +57,11 @@ class NoiseManager:
         self.running = False
         self.current_stage: str | None = None
         self.target_namespace: str | None = None
+        self.target_deployment: str | None = None
+        self.noise_profile: str | None = None
+        self.duration_seconds = DEFAULT_DURATION_SECONDS
         self.active_experiments: list[dict[str, str]] = []
+        self.active_workloads: list[dict[str, str]] = []
         self._background_thread: threading.Thread | None = None
         self._last_injection_time: float = 0
         self._lock = threading.Lock()
@@ -66,6 +75,9 @@ class NoiseManager:
 
     def set_problem_context(self, context: dict[str, Any]):
         self.target_namespace = context.get("namespace")
+        self.target_deployment = context.get("target_deployment")
+        self.noise_profile = context.get("noise_profile")
+        self.duration_seconds = context.get("noise_duration_seconds", DEFAULT_DURATION_SECONDS)
         logger.info(f"Noise target namespace: {self.target_namespace}")
 
     # ── Lifecycle ─────────────────────────────────────────────────────
@@ -74,11 +86,26 @@ class NoiseManager:
         """Start the background noise injection loop."""
         if self.running:
             return
-        self._ensure_chaos_mesh_installed()
-        if not self._chaos_mesh_ready:
-            logger.warning("Chaos Mesh is not ready; noise will not be injected.")
-            return
-        self.running = True
+        if self.noise_profile == CLOCK_SKEW_PROFILE:
+            self._ensure_chaos_mesh_installed()
+            if not self._chaos_mesh_ready:
+                raise RuntimeError("The clock-skew profile requires Chaos Mesh to be ready")
+            self.running = True
+            try:
+                self._maybe_inject()
+            except Exception:
+                self.running = False
+                self._cleanup_experiments()
+                self._cleanup_workloads()
+                raise
+        elif self.noise_profile is None:
+            self._ensure_chaos_mesh_installed()
+            if not self._chaos_mesh_ready:
+                logger.warning("Chaos Mesh is not ready; noise will not be injected.")
+                return
+            self.running = True
+        else:
+            raise ValueError(f"Unknown noise profile: {self.noise_profile}")
         self._background_thread = threading.Thread(target=self._background_loop, daemon=True)
         self._background_thread.start()
         logger.info("Noise injection started.")
@@ -90,6 +117,7 @@ class NoiseManager:
             self._background_thread.join(timeout=5)
             self._background_thread = None
         self._cleanup_experiments()
+        self._cleanup_workloads()
         # Strip finalizers from any remaining chaos-mesh CRs so the namespace
         # can terminate cleanly when reconcile_to_baseline deletes it.
         self._force_remove_all_chaos_resources()
@@ -114,17 +142,39 @@ class NoiseManager:
         if now - self._last_injection_time < COOLDOWN:
             return
 
-        n = min(MAX_CONCURRENT, len(EXPERIMENT_CATALOG))
-        selected = random.sample(EXPERIMENT_CATALOG, n)
+        if self.noise_profile == CLOCK_SKEW_PROFILE:
+            if not self.target_deployment:
+                raise RuntimeError("The clock-skew profile requires a target deployment")
+            self._cleanup_experiments()
+            self._cleanup_workloads()
+            observer = ClockSkewObserver(self.kubectl)
+            resource = observer.inject(namespace=self.target_namespace, target_deployment=self.target_deployment)
+            with self._lock:
+                if self.running:
+                    self.active_workloads.append(resource)
+                else:
+                    observer.delete(resource)
+                    return
+            self._apply_experiment(
+                {
+                    "name": CLOCK_SKEW_PROFILE,
+                    "kind": "TimeChaos",
+                    "spec": ClockSkewObserver.time_chaos_spec(resource, duration_seconds=self.duration_seconds),
+                },
+                raise_on_error=True,
+            )
+        else:
+            n = min(MAX_CONCURRENT, len(EXPERIMENT_CATALOG))
+            selected = random.sample(EXPERIMENT_CATALOG, n)
 
-        for template in selected:
-            self._apply_experiment(template)
+            for template in selected:
+                self._apply_experiment(template)
 
         self._last_injection_time = now
 
     # ── Experiment application ────────────────────────────────────────
 
-    def _apply_experiment(self, template: dict):
+    def _apply_experiment(self, template: dict, *, raise_on_error: bool = False):
         spec = copy.deepcopy(template["spec"])
         duration_str = f"{DURATION}s"
         self._format_placeholders(spec, self.target_namespace or "default", duration_str)
@@ -144,19 +194,44 @@ class NoiseManager:
             "spec": spec,
         }
 
+        tmp_path: str | None = None
         try:
             with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as tmp:
                 yaml.dump(crd, tmp)
                 tmp_path = tmp.name
 
             out = self.kubectl.exec_command(f"kubectl apply -f {tmp_path}")
-            os.remove(tmp_path)
             logger.info(f"Applied noise experiment {name}: {out}")
 
             with self._lock:
                 self.active_experiments.append({"name": name, "kind": kind})
         except Exception as e:
             logger.error(f"Failed to apply noise experiment {name}: {e}")
+            if raise_on_error:
+                raise
+        finally:
+            if tmp_path is not None:
+                with contextlib.suppress(OSError):
+                    os.remove(tmp_path)
+
+    def _cleanup_workloads(self):
+        with self._lock:
+            active = self.active_workloads
+            self.active_workloads = []
+
+        observer = ClockSkewObserver(self.kubectl)
+        remaining = []
+        for resource in active:
+            try:
+                observer.delete(resource)
+                logger.info(f"Cleaned up noise workload {resource['namespace']}/{resource['name']}")
+            except Exception as e:
+                logger.error(f"Failed to clean up noise workload {resource['namespace']}/{resource['name']}: {e}")
+                remaining.append(resource)
+
+        if remaining:
+            with self._lock:
+                self.active_workloads.extend(remaining)
 
     @staticmethod
     def _format_placeholders(d: dict, target_namespace: str, duration: str):
