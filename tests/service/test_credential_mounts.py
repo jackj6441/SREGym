@@ -23,6 +23,18 @@ def aws_mounts(args):
     return [args[i + 1] for i, item in enumerate(args) if item == "-v" and "/root/.aws" in args[i + 1]]
 
 
+def container_env(args):
+    values = [args[i + 1] for i, item in enumerate(args) if item == "-e"]
+    return dict(value.split("=", 1) for value in values)
+
+
+def docker_command(runner):
+    try:
+        return runner.build_docker_command(ExecInput(command="true"))
+    finally:
+        runner.cleanup_credential_tmps()
+
+
 def test_aws_dir_not_mounted_without_aws_credentials(fake_home, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     runner = make_runner(AGENT_MODEL_ID="gpt-5")
@@ -112,6 +124,51 @@ def test_bedrock_judge_does_not_mount_into_agent_container(fake_home):
     )
 
     assert aws_mounts(runner._build_base_docker_args()) == []
+
+
+def test_native_opencode_agent_does_not_receive_host_judge_credentials(fake_home, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "judge-provider-secret")
+    monkeypatch.setenv("JUDGE_API_KEY", "explicit-judge-secret")
+    monkeypatch.setenv("JUDGE_MODEL_ID", "gpt-4o-mini")
+    runner = make_runner(AGENT_MODEL_ID="opencode/muse-spark-1.3-contributor-free")
+
+    env = container_env(docker_command(runner))
+
+    assert env["AGENT_MODEL_ID"] == "opencode/muse-spark-1.3-contributor-free"
+    assert "OPENAI_API_KEY" not in env
+    assert "JUDGE_API_KEY" not in env
+    assert "JUDGE_MODEL_ID" not in env
+
+
+def test_openai_agent_receives_only_its_provider_credentials(fake_home, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "agent-provider-secret")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "unrelated-provider-secret")
+    runner = make_runner(AGENT_MODEL_ID="openai/gpt-5")
+
+    env = container_env(docker_command(runner))
+
+    assert env["OPENAI_API_KEY"] == "agent-provider-secret"
+    assert "ANTHROPIC_API_KEY" not in env
+
+
+def test_explicit_agent_api_key_reaches_agent_container(fake_home, monkeypatch):
+    monkeypatch.setenv("AGENT_API_KEY", "explicit-agent-secret")
+    runner = make_runner(AGENT_MODEL_ID="local/qwen3")
+
+    env = container_env(docker_command(runner))
+
+    assert env["AGENT_API_KEY"] == "explicit-agent-secret"
+
+
+def test_non_codex_runner_does_not_mount_codex_auth(fake_home):
+    auth = fake_home / ".codex" / "auth.json"
+    auth.parent.mkdir()
+    auth.write_text('{"tokens": {}}')
+    runner = make_runner(AGENT_MODEL_ID="opencode/muse-spark-1.3-contributor-free")
+
+    args = runner._build_base_docker_args()
+
+    assert not any("/root/.codex/auth.json" in item for item in args)
 
 
 def test_kickoff_env_reaches_the_gate(fake_home):

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sregym.service.container_runner import DEFAULT_AGENT_IMAGE
+from sregym.service.container_runner import DEFAULT_AGENT_IMAGE, ContainerRunner
 
 
 class ArtifactFinalizationError(RuntimeError):
@@ -62,6 +62,7 @@ class RunArtifacts:
         self._assert_target_available()
         _normalize_ownership(self.active_dir, ownership_image)
         try:
+            _redact_host_credentials(self.active_dir)
             if hit := _find_token_hit(self.active_dir, self.problem_id):
                 raise ArtifactFinalizationError(f"real problem id found in opaque artifacts: {hit}")
 
@@ -191,6 +192,33 @@ def _find_token_hit(root: Path, token: str) -> str | None:
                     return f"file:{path}"
                 tail = data[-overlap:] if overlap else b""
     return None
+
+
+def _redact_host_credentials(root: Path) -> None:
+    """Remove exact host credential values before artifacts are published."""
+    secrets_to_redact = {
+        value.encode()
+        for name in ContainerRunner.SENSITIVE_HOST_ENV_VARS
+        if len(value := os.environ.get(name, "")) >= 8
+    }
+    if not secrets_to_redact:
+        return
+
+    for path in _walk(root):
+        if path.is_symlink() or not path.is_file():
+            continue
+        data = path.read_bytes()
+        redacted = data
+        for secret in sorted(secrets_to_redact, key=len, reverse=True):
+            redacted = redacted.replace(secret, b"[REDACTED]")
+        if redacted == data:
+            continue
+        tmp = _temp_path(path)
+        try:
+            tmp.write_bytes(redacted)
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
 
 def _rewrite_json(path: Path, artifact_id: str, problem_id: str) -> None:

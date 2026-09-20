@@ -34,16 +34,14 @@ def run_preflight() -> None:
     import subprocess
     import tempfile
 
-    from clients.opencode.opencode_agent import write_local_provider_config
+    from clients.opencode.opencode_agent import write_opencode_config
 
     m = os.environ["AGENT_MODEL_ID"]
     env = os.environ.copy()
     env["OPENCODE_FAKE_VCS"] = "git"
 
-    config_dir = None
-    if m.startswith("local/"):
-        config_dir = tempfile.mkdtemp(prefix="opencode-preflight-")
-        env["OPENCODE_CONFIG"] = str(write_local_provider_config(m, Path(config_dir) / "opencode.json", env))
+    config_dir = tempfile.mkdtemp(prefix="opencode-preflight-")
+    env["OPENCODE_CONFIG"] = str(write_opencode_config(m, Path(config_dir) / "opencode.json", env))
 
     command = [
         "opencode",

@@ -913,6 +913,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
                 force_build=args.force_build and agent_image is None,
                 k8s_proxy_port=conductor_config.k8s_proxy_listen_port,
                 image=agent_image,
+                agent_name=args.agent,
             )
 
         # Pre-flight check — makes a real (minimal) API call inside the agent

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from clients.opencode.opencode_agent import write_local_provider_config
+from clients.opencode.opencode_agent import OpenCodeAgent, write_local_provider_config
 
 
 def read_config(path):
@@ -50,3 +50,31 @@ def test_secrets_are_referenced_not_inlined(tmp_path):
 def test_missing_api_base_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="AGENT_API_BASE"):
         write_local_provider_config("local/m", tmp_path / "opencode.json", {})
+
+
+def test_config_allows_read_only_access_to_mounted_app_manifests(tmp_path):
+    config = read_config(
+        write_local_provider_config(
+            "local/m",
+            tmp_path / "opencode.json",
+            {"AGENT_API_BASE": "http://host:11434/v1"},
+        )
+    )
+
+    assert config["permission"]["external_directory"]["/opt/sregym/SREGym-applications/**"] == "allow"
+    assert config["permission"]["edit"]["/opt/sregym/SREGym-applications/**"] == "deny"
+
+
+def test_native_opencode_model_also_uses_the_safe_permission_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "judge-secret")
+    monkeypatch.setenv("JUDGE_API_KEY", "explicit-judge-secret")
+    agent = OpenCodeAgent(tmp_path, "opencode/muse-spark-1.3-contributor-free")
+
+    env = agent._build_env()
+    config = read_config(env["OPENCODE_CONFIG"])
+
+    assert "OPENAI_API_KEY" not in env
+    assert "JUDGE_API_KEY" not in env
+    assert "provider" not in config
+    assert config["permission"]["external_directory"]["/opt/sregym/SREGym-applications/**"] == "allow"
+    assert config["permission"]["edit"]["/opt/sregym/SREGym-applications/**"] == "deny"

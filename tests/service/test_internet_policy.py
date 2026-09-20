@@ -189,7 +189,7 @@ def test_codex_auth_mount_does_not_expose_writable_host_directory(monkeypatch, t
     codex_dir.mkdir()
     (codex_dir / "auth.json").write_text('{"tokens": {}}')
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    runner = ContainerRunner()
+    runner = ContainerRunner(ContainerConfig(codex_auth="copy"))
     args: list[str] = []
 
     try:

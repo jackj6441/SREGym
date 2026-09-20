@@ -187,6 +187,8 @@ def test_main_sets_custom_k8s_port_before_agent_preflight(monkeypatch):
         use_external_harness=False,
         profile="full",
         noise=False,
+        noise_profile=None,
+        noise_duration_seconds=3600,
         force_build=False,
         stages=None,
     )

@@ -46,38 +46,45 @@ PROVIDER_ENV_VARS: dict[str, list[str]] = {
 }
 
 
-def write_local_provider_config(model_name: str, config_path: Path, env: dict[str, str]) -> Path:
-    """Declare the `local` OpenAI-compatible provider for a `local/<model>` name.
+def write_opencode_config(model_name: str, config_path: Path, env: dict[str, str]) -> Path:
+    """Write provider and least-privilege workspace permissions for OpenCode.
 
-    OpenCode has no built-in `local` provider, so both the agent run and the
-    pre-flight check must supply this config or the CLI fails with an opaque
-    server error.
+    The application manifests are mounted outside OpenCode's working directory.
+    They are safe to inspect but are host-owned benchmark inputs and therefore
+    remain read-only. Local models additionally need a custom provider entry.
     """
-    if not env.get("AGENT_API_BASE"):
-        raise ValueError("AGENT_API_BASE is required for local OpenCode models")
+    config = {
+        "$schema": "https://opencode.ai/config.json",
+        "permission": {
+            "external_directory": {"/opt/sregym/SREGym-applications/**": "allow"},
+            "edit": {"/opt/sregym/SREGym-applications/**": "deny"},
+        },
+    }
 
-    model = model_name.split("/", 1)[1]
-    options = {"baseURL": "{env:AGENT_API_BASE}"}
-    if env.get("AGENT_API_KEY"):
-        options["apiKey"] = "{env:AGENT_API_KEY}"
+    if model_name.startswith("local/"):
+        if not env.get("AGENT_API_BASE"):
+            raise ValueError("AGENT_API_BASE is required for local OpenCode models")
+        model = model_name.split("/", 1)[1]
+        options = {"baseURL": "{env:AGENT_API_BASE}"}
+        if env.get("AGENT_API_KEY"):
+            options["apiKey"] = "{env:AGENT_API_KEY}"
+        config["provider"] = {
+            "local": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Local",
+                "options": options,
+                "models": {model: {"name": model}},
+            }
+        }
 
     with open(config_path, "w") as config_file:
-        json.dump(
-            {
-                "$schema": "https://opencode.ai/config.json",
-                "provider": {
-                    "local": {
-                        "npm": "@ai-sdk/openai-compatible",
-                        "name": "Local",
-                        "options": options,
-                        "models": {model: {"name": model}},
-                    }
-                },
-            },
-            config_file,
-            indent=2,
-        )
+        json.dump(config, config_file, indent=2)
     return config_path
+
+
+def write_local_provider_config(model_name: str, config_path: Path, env: dict[str, str]) -> Path:
+    """Backward-compatible wrapper for local-provider configuration."""
+    return write_opencode_config(model_name, config_path, env)
 
 
 class OpenCodeAgent:
@@ -361,7 +368,15 @@ class OpenCodeAgent:
         """Build environment variables for OpenCode execution."""
         env = os.environ.copy()
 
-        # Get provider-specific environment variables
+        # Defense in depth: keep unrelated provider and judge credentials out
+        # of the OpenCode subprocess even if its parent was misconfigured.
+        for variables in PROVIDER_ENV_VARS.values():
+            for var in variables:
+                env.pop(var, None)
+        for var in ("JUDGE_API_KEY", "JUDGE_API_BASE", "JUDGE_MODEL_ID"):
+            env.pop(var, None)
+
+        # Restore only the selected provider's environment variables.
         env_vars = PROVIDER_ENV_VARS.get(self.provider, [])
         has_auth = False
 
@@ -373,9 +388,8 @@ class OpenCodeAgent:
         if env_vars and not has_auth:
             logger.warning(f"No authentication found for provider '{self.provider}'. Expected one of: {env_vars}")
 
-        if self.provider == "local":
-            config_path = write_local_provider_config(self.model_name, self.logs_dir / "opencode.json", env)
-            env["OPENCODE_CONFIG"] = str(config_path)
+        config_path = write_opencode_config(self.model_name, self.logs_dir / "opencode.json", env)
+        env["OPENCODE_CONFIG"] = str(config_path)
 
         # Enable fake VCS for OpenCode (required for non-git directories)
         env["OPENCODE_FAKE_VCS"] = "git"

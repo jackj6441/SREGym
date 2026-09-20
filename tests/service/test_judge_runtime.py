@@ -139,6 +139,8 @@ def test_main_image_selection_reuses_one_build(monkeypatch, backend, external, f
         container_hardening="on",
         profile="full",
         noise=False,
+        noise_profile=None,
+        noise_duration_seconds=3600,
         stages=None,
     )
     with pytest.raises(StopBeforeCluster):

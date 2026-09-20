@@ -136,111 +136,18 @@ class ContainerConfig:
     k8s_proxy_port: int = 16443
     published_ports: list[str] = field(default_factory=list)
     forward_host_credentials: bool = True
-    codex_auth: Literal["copy", "shared", "none"] = "copy"
+    codex_auth: Literal["copy", "shared", "none"] = "none"
 
 
 class ContainerRunner:
-    # Env vars forwarded from host to agent containers.
-    # Sourced from litellm provider source code (llms/<provider>/).
-    API_KEY_VARS = [
-        # OpenAI
-        "OPENAI_API_KEY",
-        "OPENAI_API_BASE",
-        "OPENAI_BASE_URL",
-        # DeepSeek
-        "DEEPSEEK_API_KEY",
-        "DEEPSEEK_API_BASE",
-        # Anthropic
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_API_BASE",
-        # Gemini / Google
-        "GOOGLE_API_KEY",
-        "GEMINI_API_KEY",
-        "GEMINI_API_BASE",
-        # Azure OpenAI
-        "AZURE_API_KEY",
-        "AZURE_OPENAI_API_KEY",
-        "AZURE_API_BASE",
-        "AZURE_API_VERSION",
-        "AZURE_AD_TOKEN",
-        "AZURE_CLIENT_ID",
-        "AZURE_CLIENT_SECRET",
-        "AZURE_TENANT_ID",
-        "AZURE_USERNAME",
-        "AZURE_PASSWORD",
-        "AZURE_CERTIFICATE_PATH",
-        "AZURE_CERTIFICATE_PASSWORD",
-        "AZURE_CREDENTIAL",
-        "AZURE_SCOPE",
-        "AZURE_AUTHORITY_HOST",
-        "AZURE_FEDERATED_TOKEN_FILE",
-        # AWS Bedrock
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "AWS_REGION_NAME",
-        "AWS_REGION",
-        "AWS_DEFAULT_REGION",
-        "AWS_SESSION_NAME",
-        "AWS_PROFILE",
-        "AWS_PROFILE_NAME",
-        "AWS_ROLE_NAME",
-        "AWS_ROLE_ARN",
-        "AWS_WEB_IDENTITY_TOKEN",
-        "AWS_WEB_IDENTITY_TOKEN_FILE",
-        "AWS_STS_ENDPOINT",
-        "AWS_EXTERNAL_ID",
-        "AWS_BEDROCK_RUNTIME_ENDPOINT",
-        "AWS_BEARER_TOKEN_BEDROCK",
-        # WatsonX / IBM
-        "WATSONX_API_KEY",
-        "WATSONX_APIKEY",
-        "WATSONX_API_BASE",
-        "WATSONX_URL",
-        "WATSONX_TOKEN",
-        "WATSONX_PROJECT_ID",
-        "WATSONX_REGION",
-        "WATSONX_SPACE_ID",
-        "WATSONX_DEPLOYMENT_SPACE_ID",
-        "WATSONX_IAM_URL",
-        "WATSONX_ZENAPIKEY",
-        "WX_API_KEY",
-        "WX_PROJECT_ID",
-        "WX_URL",
-        "WX_REGION",
-        "WX_SPACE_ID",
-        "WML_URL",
-        # Vertex AI
-        "VERTEXAI_PROJECT",
-        "VERTEXAI_LOCATION",
-        "VERTEX_LOCATION",
-        "VERTEXAI_CREDENTIALS",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        # Moonshot
-        "MOONSHOT_API_KEY",
-        "MOONSHOT_API_BASE",
-        # GLM
-        "GLM_API_KEY",
-        "ZAI_API_KEY",
-        "ZHIPU_API_KEY",
-        # Cursor CLI
-        "CURSOR_API_KEY",
-        # Claude Code
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        # GitHub Copilot CLI
-        "COPILOT_GITHUB_TOKEN",
-        "COPILOT_PROVIDER_BASE_URL",
-        "COPILOT_PROVIDER_API_KEY",
-        "COPILOT_PROVIDER_TYPE",
-        # SREGym internal
+    # Agent-side runtime configuration is safe to forward independently of
+    # the selected model provider. Judge configuration is deliberately absent:
+    # the judge runs in the host-side conductor, not in the agent container.
+    AGENT_CONFIG_VARS = (
         "AGENT_MODEL_ID",
         "AGENT_REASONING_EFFORT",
         "AGENT_API_BASE",
         "AGENT_API_KEY",
-        "JUDGE_MODEL_ID",
-        "JUDGE_API_BASE",
-        "JUDGE_API_KEY",
-        # Config vars
         "API_HOSTNAME",
         "API_PORT",
         "MCP_SERVER_PORT",
@@ -251,7 +158,190 @@ class ContainerRunner:
         "LLM_QUERY_MAX_RETRIES",
         "LLM_QUERY_INIT_RETRY_DELAY",
         "WAIT_FOR_POD_READY_TIMEOUT",
-    ]
+    )
+
+    # Host credentials are selected by the *agent* provider. Forwarding every
+    # provider's credentials lets an unrelated agent read the judge's key.
+    # Names are sourced from LiteLLM and the bundled agent clients.
+    PROVIDER_CREDENTIAL_VARS = {
+        "openai": (
+            "OPENAI_API_KEY",
+            "OPENAI_API_BASE",
+            "OPENAI_BASE_URL",
+        ),
+        "deepseek": ("DEEPSEEK_API_KEY", "DEEPSEEK_API_BASE"),
+        "anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_API_BASE", "CLAUDE_CODE_OAUTH_TOKEN"),
+        "google": (
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+            "GEMINI_API_BASE",
+            "GOOGLE_GENERATIVE_AI_API_KEY",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_CLOUD_LOCATION",
+            "GOOGLE_GENAI_USE_VERTEXAI",
+        ),
+        "gemini": (
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+            "GEMINI_API_BASE",
+            "GOOGLE_GENERATIVE_AI_API_KEY",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_CLOUD_LOCATION",
+            "GOOGLE_GENAI_USE_VERTEXAI",
+        ),
+        "azure": (
+            "AZURE_API_KEY",
+            "AZURE_OPENAI_API_KEY",
+            "AZURE_API_BASE",
+            "AZURE_API_VERSION",
+            "AZURE_AD_TOKEN",
+            "AZURE_CLIENT_ID",
+            "AZURE_CLIENT_SECRET",
+            "AZURE_TENANT_ID",
+            "AZURE_USERNAME",
+            "AZURE_PASSWORD",
+            "AZURE_CERTIFICATE_PATH",
+            "AZURE_CERTIFICATE_PASSWORD",
+            "AZURE_CREDENTIAL",
+            "AZURE_SCOPE",
+            "AZURE_AUTHORITY_HOST",
+            "AZURE_FEDERATED_TOKEN_FILE",
+            "AZURE_RESOURCE_NAME",
+        ),
+        "amazon-bedrock": (
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "AWS_REGION_NAME",
+            "AWS_REGION",
+            "AWS_DEFAULT_REGION",
+            "AWS_SESSION_NAME",
+            "AWS_PROFILE",
+            "AWS_PROFILE_NAME",
+            "AWS_ROLE_NAME",
+            "AWS_ROLE_ARN",
+            "AWS_WEB_IDENTITY_TOKEN",
+            "AWS_WEB_IDENTITY_TOKEN_FILE",
+            "AWS_STS_ENDPOINT",
+            "AWS_EXTERNAL_ID",
+            "AWS_BEDROCK_RUNTIME_ENDPOINT",
+            "AWS_BEARER_TOKEN_BEDROCK",
+        ),
+        "watsonx": (
+            "WATSONX_API_KEY",
+            "WATSONX_APIKEY",
+            "WATSONX_API_BASE",
+            "WATSONX_URL",
+            "WATSONX_TOKEN",
+            "WATSONX_PROJECT_ID",
+            "WATSONX_REGION",
+            "WATSONX_SPACE_ID",
+            "WATSONX_DEPLOYMENT_SPACE_ID",
+            "WATSONX_IAM_URL",
+            "WATSONX_ZENAPIKEY",
+            "WX_API_KEY",
+            "WX_PROJECT_ID",
+            "WX_URL",
+            "WX_REGION",
+            "WX_SPACE_ID",
+            "WML_URL",
+        ),
+        "vertex-ai": (
+            "VERTEXAI_PROJECT",
+            "VERTEXAI_LOCATION",
+            "VERTEX_LOCATION",
+            "VERTEXAI_CREDENTIALS",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+        ),
+        "moonshot": ("MOONSHOT_API_KEY", "MOONSHOT_API_BASE"),
+        "glm": ("GLM_API_KEY", "ZAI_API_KEY", "ZHIPU_API_KEY"),
+        "zai-coding-plan": ("ZAI_API_KEY",),
+        "cursor": ("CURSOR_API_KEY",),
+        "github-copilot": (
+            "GITHUB_TOKEN",
+            "COPILOT_GITHUB_TOKEN",
+            "COPILOT_PROVIDER_BASE_URL",
+            "COPILOT_PROVIDER_API_KEY",
+            "COPILOT_PROVIDER_TYPE",
+        ),
+        "groq": ("GROQ_API_KEY",),
+        "huggingface": ("HF_TOKEN",),
+        "llama": ("LLAMA_API_KEY",),
+        "mistral": ("MISTRAL_API_KEY",),
+        "xai": ("XAI_API_KEY",),
+        "opencode": (),
+        "local": (),
+    }
+    PROVIDER_CREDENTIAL_VARS["bedrock"] = PROVIDER_CREDENTIAL_VARS["amazon-bedrock"]
+    PROVIDER_CREDENTIAL_VARS["sagemaker"] = PROVIDER_CREDENTIAL_VARS["amazon-bedrock"]
+
+    # Compatibility hook used by integration tests and callers that disable
+    # all implicit host forwarding. Judge variables intentionally stay out.
+    API_KEY_VARS = (
+        *AGENT_CONFIG_VARS,
+        *dict.fromkeys(var for values in PROVIDER_CREDENTIAL_VARS.values() for var in values),
+    )
+
+    # All sensitive values that may appear in raw subprocess output. This list
+    # is also used by artifact publication for defense-in-depth redaction.
+    SENSITIVE_HOST_ENV_VARS = (
+        # OpenAI
+        "OPENAI_API_KEY",
+        # DeepSeek
+        "DEEPSEEK_API_KEY",
+        # Anthropic
+        "ANTHROPIC_API_KEY",
+        # Gemini / Google
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_GENERATIVE_AI_API_KEY",
+        # Azure OpenAI
+        "AZURE_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_AD_TOKEN",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_PASSWORD",
+        "AZURE_CERTIFICATE_PASSWORD",
+        "AZURE_CREDENTIAL",
+        # AWS Bedrock
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_WEB_IDENTITY_TOKEN",
+        "AWS_EXTERNAL_ID",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        # WatsonX / IBM
+        "WATSONX_API_KEY",
+        "WATSONX_APIKEY",
+        "WATSONX_TOKEN",
+        "WATSONX_ZENAPIKEY",
+        "WX_API_KEY",
+        # Vertex AI
+        "VERTEXAI_CREDENTIALS",
+        # Moonshot
+        "MOONSHOT_API_KEY",
+        # GLM
+        "GLM_API_KEY",
+        "ZAI_API_KEY",
+        "ZHIPU_API_KEY",
+        # Cursor CLI
+        "CURSOR_API_KEY",
+        # Claude Code
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        # GitHub Copilot CLI
+        "COPILOT_GITHUB_TOKEN",
+        "COPILOT_PROVIDER_API_KEY",
+        "GITHUB_TOKEN",
+        "GROQ_API_KEY",
+        "HF_TOKEN",
+        "LLAMA_API_KEY",
+        "MISTRAL_API_KEY",
+        "XAI_API_KEY",
+        "AGENT_API_KEY",
+        "JUDGE_API_KEY",
+    )
 
     # Vars that select AWS credentials. Region vars are excluded on purpose:
     # they say where to call, not which identity to call with.
@@ -526,9 +616,17 @@ class ContainerRunner:
         flags = []
         env_vars = dict(self.config.env_vars)
 
-        # Forward API keys from host (skip empty values to avoid overriding
-        # other auth mechanisms like OAuth subscription tokens)
-        for var in self.API_KEY_VARS if self.config.forward_host_credentials else ():
+        # Forward only agent configuration and credentials required by the
+        # selected agent provider. The host-side judge's credentials must
+        # never become ambient state inside the untrusted agent container.
+        model_id = str(
+            (extra_env or {}).get("AGENT_MODEL_ID") or env_vars.get("AGENT_MODEL_ID") or os.getenv("AGENT_MODEL_ID", "")
+        )
+        provider = model_id.split("/", 1)[0].casefold() if "/" in model_id else "openai"
+        selected_vars = (*self.AGENT_CONFIG_VARS, *self.PROVIDER_CREDENTIAL_VARS.get(provider, ()))
+        allowed_vars = set(self.API_KEY_VARS)
+        host_vars = (var for var in selected_vars if var in allowed_vars)
+        for var in host_vars if self.config.forward_host_credentials else ():
             if var in os.environ and var not in env_vars and os.environ[var]:
                 env_vars[var] = os.environ[var]
 
