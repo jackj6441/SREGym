@@ -78,3 +78,11 @@ def test_native_opencode_model_also_uses_the_safe_permission_config(tmp_path, mo
     assert "provider" not in config
     assert config["permission"]["external_directory"]["/opt/sregym/SREGym-applications/**"] == "allow"
     assert config["permission"]["edit"]["/opt/sregym/SREGym-applications/**"] == "deny"
+
+
+def test_continuation_command_targets_the_existing_session(tmp_path):
+    agent = OpenCodeAgent(tmp_path, "opencode/muse-spark-1.3-contributor-free")
+
+    command = agent._build_command("finish the current stage", session_id="ses-123")
+
+    assert "--session=ses-123" in command

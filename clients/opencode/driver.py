@@ -137,6 +137,74 @@ def wait_for_ready_stage(timeout: int = 300) -> str:
     raise TimeoutError(f"Conductor did not reach ready stage within {timeout} seconds")
 
 
+def get_current_stage() -> str:
+    """Return the conductor stage after an OpenCode invocation exits."""
+    response = requests.get(f"{get_api_base_url()}/status", timeout=10)
+    response.raise_for_status()
+    return str(response.json().get("stage", ""))
+
+
+def _continuation_instruction(stage: str) -> str:
+    if stage == "diagnosis":
+        action = (
+            "Finish the diagnosis using Kubernetes evidence, then POST a precise root-cause description "
+            f"to {get_api_base_url()}/submit."
+        )
+    else:
+        action = (
+            f"Apply and verify the root-cause fix, then POST an empty solution string to {get_api_base_url()}/submit."
+        )
+    return (
+        f"The conductor is still waiting in the {stage} stage, so the required submission has not completed. "
+        "Continue this same session from the evidence already collected. "
+        f"{action} Do not stop after a summary or another investigation step; complete the submission before exiting."
+    )
+
+
+def run_until_conductor_finishes(
+    agent: OpenCodeAgent,
+    instruction: str,
+    *,
+    max_continuations: int = 4,
+) -> int:
+    """Keep a successful OpenCode session alive until the conductor advances."""
+    return_code = agent.run(instruction, export_session=False)
+    continuations = 0
+    try:
+        while return_code == 0:
+            stage = get_current_stage()
+            if stage not in {"diagnosis", "mitigation"}:
+                break
+            if continuations >= max_continuations:
+                logger.error(
+                    "OpenCode exited without completing the %s submission after %s continuations",
+                    stage,
+                    max_continuations,
+                )
+                return_code = 1
+                break
+            session_id = agent._get_session_id()
+            if not session_id:
+                logger.error("OpenCode exited before submission and no session ID is available for continuation")
+                return_code = 1
+                break
+            continuations += 1
+            logger.warning(
+                "OpenCode exited while conductor is still in %s; continuing session (%s/%s)",
+                stage,
+                continuations,
+                max_continuations,
+            )
+            return_code = agent.run(
+                _continuation_instruction(stage),
+                export_session=False,
+                session_id=session_id,
+            )
+    finally:
+        agent.export_session()
+    return return_code
+
+
 def build_instruction(app_info: dict) -> str:
     """
     Build the instruction string for OpenCode.
@@ -295,7 +363,7 @@ def main():
 
     # Run OpenCode
     logger.info("Starting OpenCode execution...")
-    return_code = agent.run(instruction)
+    return_code = run_until_conductor_finishes(agent, instruction)
 
     # Get usage metrics
     usage_metrics = agent.get_usage_metrics()

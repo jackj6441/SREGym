@@ -396,17 +396,18 @@ class OpenCodeAgent:
 
         return env
 
-    def _build_command(self, instruction: str) -> str:
+    def _build_command(self, instruction: str, *, session_id: str | None = None) -> str:
         """Build the OpenCode command, preserving the CLI's default variant when unset."""
         escaped_instruction = shlex.quote(instruction)
         reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
         variant_arg = f" --variant {shlex.quote(reasoning_effort)}" if reasoning_effort else ""
+        session_arg = f" --session={shlex.quote(session_id)}" if session_id else ""
         return (
             f"opencode --model={shlex.quote(self.model_name)} run --format=json --thinking"
-            f"{variant_arg} {escaped_instruction}"
+            f"{variant_arg}{session_arg} {escaped_instruction}"
         )
 
-    def run(self, instruction: str, export_session: bool = True) -> int:
+    def run(self, instruction: str, export_session: bool = True, *, session_id: str | None = None) -> int:
         """
         Run the OpenCode agent with the given instruction.
 
@@ -422,12 +423,12 @@ class OpenCodeAgent:
 
         env = self._build_env()
 
-        command = self._build_command(instruction)
+        command = self._build_command(instruction, session_id=session_id)
 
         logger.info(f"Executing command: {command}")
 
         try:
-            with open(self.output_path, "w") as out_file:
+            with open(self.output_path, "a" if session_id else "w") as out_file:
                 process = subprocess.Popen(
                     command,
                     shell=True,
