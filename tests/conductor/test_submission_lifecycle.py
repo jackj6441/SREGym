@@ -690,64 +690,59 @@ def test_worker_base_exception_becomes_controlled_evaluation_failure():
     assert conductor._submit_future is None
 
 
-def test_late_noise_restart_is_stopped_after_attempt_is_abandoned(monkeypatch):
-    start_entered = threading.Event()
-    release_start = threading.Event()
+def test_noise_persists_from_diagnosis_validation_through_mitigation_validation_until_cleanup(monkeypatch):
+    events: list[str] = []
 
     class FakeNoiseManager:
         def __init__(self):
-            self.running = False
-            self.stages: list[str] = []
-
-        def start(self):
-            start_entered.set()
-            release_start.wait(2)
             self.running = True
+            self.stops = 0
 
         def stop(self):
+            events.append("noise:stop")
             self.running = False
+            self.stops += 1
 
         def set_stage(self, stage):
-            self.stages.append(stage)
+            assert self.running is True
+            events.append(f"noise:stage:{stage}")
 
     noise = FakeNoiseManager()
-    conductor = _conductor(diagnosis_evaluation=lambda _solution: {"success": True})
+
+    def evaluate_diagnosis(_solution):
+        assert noise.running is True
+        events.append("evaluate:diagnosis")
+        return {"success": True}
+
+    def evaluate_mitigation(_solution):
+        assert noise.running is True
+        events.append("evaluate:mitigation")
+        return {"success": True}
+
+    conductor = _conductor(evaluate_diagnosis, evaluate_mitigation)
     conductor.config.enable_noise = True
+    conductor.problem = SimpleNamespace(
+        recover_fault=lambda: events.append("cleanup:recover_fault"),
+        app=SimpleNamespace(cleanup=lambda: events.append("cleanup:app")),
+    )
     monkeypatch.setattr(conductor_module, "get_noise_manager", lambda: noise)
 
-    worker = threading.Thread(
-        target=conductor._submit_evaluate_and_advance,
-        args=("diagnosis", conductor.stage_sequence[0], 1),
-    )
-    worker.start()
-    assert start_entered.wait(1)
-    conductor.abandon_submission_work()
-    noise.stop()  # Emulate the driver's global shutdown after abandonment.
-    release_start.set()
-    worker.join(timeout=2)
+    conductor._submit_evaluate_and_advance("diagnosis", conductor.stage_sequence[0], 1)
 
-    assert not worker.is_alive()
-    assert noise.running is False
-    assert noise.stages == []
-    assert conductor.submission_stage == "aborted"
+    assert noise.stops == 0
+    assert conductor.submission_stage == "mitigation"
+    conductor._submit_evaluate_and_advance("mitigation", conductor.stage_sequence[1], 1)
 
-
-def test_selected_noise_profile_restart_failure_is_surfaced(monkeypatch):
-    class FakeNoiseManager:
-        def stop(self):
-            return None
-
-        def start(self):
-            raise RuntimeError("timechaos unavailable")
-
-    conductor = _conductor(diagnosis_evaluation=lambda _solution: {"success": True})
-    conductor.config = SimpleNamespace(enable_noise=True, noise_profile="clock-skew")
-    monkeypatch.setattr(conductor_module, "get_noise_manager", FakeNoiseManager)
-
-    with pytest.raises(RuntimeError, match="Selected noise profile failed to restart"):
-        conductor._submit_evaluate_and_advance("diagnosis", conductor.stage_sequence[0], 1)
-
-    assert conductor.submission_stage == "diagnosis"
+    assert noise.stops == 1
+    assert conductor.submission_stage == "done"
+    assert events == [
+        "evaluate:diagnosis",
+        "noise:stage:mitigation",
+        "evaluate:mitigation",
+        "noise:stop",
+        "cleanup:recover_fault",
+        "cleanup:app",
+    ]
 
 
 def test_incomplete_attempt_records_missing_stages_and_agent_exit():

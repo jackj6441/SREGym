@@ -11,7 +11,9 @@ from sregym.service.kubectl import KubeCtl
 
 CLOCK_SKEW_PROFILE = "clock-skew"
 NOISE_PROFILES = (CLOCK_SKEW_PROFILE,)
-DEFAULT_DURATION_SECONDS = 120
+# Cover both default 1200-second agent stages plus oracle evaluation without
+# expiring and recreating the deterministic treatment mid-attempt.
+DEFAULT_DURATION_SECONDS = 3600
 TIME_OFFSET = "+5m"
 WORKLOAD_NAME = "analytics-clock-observer"
 RUN_LABEL = "sregym.io/noise-run"

@@ -1,7 +1,11 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from sregym.generators.noise.impl.clock_skew import ClockSkewObserver
+from sregym.generators.noise.impl.clock_skew import DEFAULT_DURATION_SECONDS, ClockSkewObserver
+
+
+def test_default_duration_covers_a_two_stage_agent_attempt():
+    assert DEFAULT_DURATION_SECONDS == 3600
 
 
 def _pod(name="frontend-abc", *, node="kind-worker2", phase="Running", ready=True):

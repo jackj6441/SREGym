@@ -719,15 +719,6 @@ class Conductor:
         stage_name: str = current_stage["name"]
         self.logger.info(f"Evaluating stage '{stage_name}'", extra={"sol": sol})
 
-        # Stop noise before evaluation to ensure clean environment
-        if self.config.enable_noise:
-            try:
-                nm = get_noise_manager()
-                self.logger.info("Stopping noise manager before evaluation...")
-                nm.stop()
-            except Exception as e:
-                self.logger.warning(f"Failed to stop noise manager: {e}")
-
         # The agent's time on this stage ends when a submission arrives to be
         # evaluated; grading time is its own phase, not the agent's.
         self._mark(f"stage:{stage_name}", "end", outcome="submitted")
@@ -768,45 +759,15 @@ class Conductor:
             stage_ledger = getattr(self, "phases", None)
 
         if next_stage_name is not None:
-            # Keep the old stage marked busy while noise is restarted. The
-            # API can wait for the next stage, but cannot submit into a
-            # partially completed transition. Do not hold the submission lock
-            # across NoiseManager I/O because a stuck noise backend must not
-            # prevent the driver from closing or abandoning the attempt.
+            # Deterministic noise remains active across diagnosis, mitigation,
+            # and mitigation verification. Stopping and recreating it here
+            # changes the treatment midway through a run and can itself become
+            # an artificial clue for the agent.
             if self.config.enable_noise:
-                nm = None
                 try:
-                    nm = get_noise_manager()
-                    self.logger.info("Restarting noise manager for next stage...")
-                    nm.start()
-                    with self._submission_lock:
-                        transition_aborted = (
-                            generation != self._submission_generation
-                            or generation in self._aborted_submission_generations
-                        )
-                    if not transition_aborted:
-                        nm.set_stage(next_stage_name)
+                    get_noise_manager().set_stage(next_stage_name)
                 except Exception as e:
-                    self.logger.warning(f"Failed to restart NoiseManager: {e}")
-                    if getattr(self.config, "noise_profile", None) is not None:
-                        if nm is not None:
-                            with contextlib.suppress(Exception):
-                                nm.stop()
-                        raise RuntimeError("Selected noise profile failed to restart for the next stage") from e
-
-                # A slow start/set_stage can finish after the driver abandons
-                # the evaluator and performs its global noise stop. Stop again
-                # so this late worker cannot leave noise running.
-                with self._submission_lock:
-                    transition_aborted = (
-                        generation != self._submission_generation or generation in self._aborted_submission_generations
-                    )
-                if transition_aborted and nm is not None:
-                    try:
-                        nm.stop()
-                    except Exception as e:
-                        self.logger.warning(f"Failed to stop late NoiseManager restart: {e}")
-                    return
+                    self.logger.warning(f"Failed to update NoiseManager stage: {e}")
 
             # Keep submissions waiting until the start record is written.
             # Use this attempt's ledger, and keep disk I/O outside the lock.

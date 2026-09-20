@@ -21,12 +21,20 @@ uv run main.py \
   --judge-model gpt-4o-mini \
   --noise \
   --noise-profile clock-skew \
-  --noise-duration-seconds 120
+  --noise-duration-seconds 3600
 ```
 
-The selected profile is injected synchronously before each agent stage. It is
-removed before stage evaluation and recreated before the next stage. A failed
+The selected profile is injected synchronously before diagnosis and remains
+active through diagnosis, mitigation, and mitigation verification. It is
+removed only during final attempt cleanup. Unlike random noise, deterministic
+clock skew has no cooldown-based reinjection loop: the observer Pod and
+TimeChaos resource keep the same identities for the whole attempt. A failed
 profile setup fails the run rather than silently continuing without noise.
+
+Use a duration long enough to cover every requested agent stage and oracle
+evaluation. This duration is the Chaos Mesh treatment TTL, not a manager
+reinjection cadence. The default is one hour; a shorter explicit value can make
+the treatment expire before mitigation finishes.
 
 ## Verify and debug
 

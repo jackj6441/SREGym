@@ -64,6 +64,7 @@ class NoiseManager:
         self.active_workloads: list[dict[str, str]] = []
         self._background_thread: threading.Thread | None = None
         self._last_injection_time: float = 0
+        self._deterministic_injected = False
         self._lock = threading.Lock()
         self._chaos_mesh_ready = False
 
@@ -83,7 +84,7 @@ class NoiseManager:
     # ── Lifecycle ─────────────────────────────────────────────────────
 
     def start(self):
-        """Start the background noise injection loop."""
+        """Start the selected noise profile."""
         if self.running:
             return
         if self.noise_profile == CLOCK_SKEW_PROFILE:
@@ -98,6 +99,8 @@ class NoiseManager:
                 self._cleanup_experiments()
                 self._cleanup_workloads()
                 raise
+            logger.info("Deterministic noise injection started.")
+            return
         elif self.noise_profile is None:
             self._ensure_chaos_mesh_installed()
             if not self._chaos_mesh_ready:
@@ -122,6 +125,7 @@ class NoiseManager:
         # can terminate cleanly when reconcile_to_baseline deletes it.
         self._force_remove_all_chaos_resources()
         self._last_injection_time = 0
+        self._deterministic_injected = False
         logger.info("Noise injection stopped.")
 
     # ── Background loop ───────────────────────────────────────────────
@@ -138,15 +142,16 @@ class NoiseManager:
         if not self.target_namespace:
             return
 
-        now = time.time()
-        if now - self._last_injection_time < COOLDOWN:
-            return
-
         if self.noise_profile == CLOCK_SKEW_PROFILE:
+            # A deterministic profile is one treatment for the full attempt.
+            # Replacing its resources would create new identities and a gap in
+            # treatment, both of which are artificial experimental clues.
+            with self._lock:
+                if self._deterministic_injected or self.active_workloads or self.active_experiments:
+                    return
+
             if not self.target_deployment:
                 raise RuntimeError("The clock-skew profile requires a target deployment")
-            self._cleanup_experiments()
-            self._cleanup_workloads()
             observer = ClockSkewObserver(self.kubectl)
             resource = observer.inject(namespace=self.target_namespace, target_deployment=self.target_deployment)
             with self._lock:
@@ -163,12 +168,20 @@ class NoiseManager:
                 },
                 raise_on_error=True,
             )
-        else:
-            n = min(MAX_CONCURRENT, len(EXPERIMENT_CATALOG))
-            selected = random.sample(EXPERIMENT_CATALOG, n)
+            with self._lock:
+                self._deterministic_injected = True
+            self._last_injection_time = time.time()
+            return
 
-            for template in selected:
-                self._apply_experiment(template)
+        now = time.time()
+        if now - self._last_injection_time < COOLDOWN:
+            return
+
+        n = min(MAX_CONCURRENT, len(EXPERIMENT_CATALOG))
+        selected = random.sample(EXPERIMENT_CATALOG, n)
+
+        for template in selected:
+            self._apply_experiment(template)
 
         self._last_injection_time = now
 
