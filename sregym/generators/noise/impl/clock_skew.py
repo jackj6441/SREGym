@@ -48,6 +48,7 @@ class ClockSkewObserver:
         selector = ",".join(f"{key}={value}" for key, value in sorted(match_labels.items()))
         pods = self.core_v1.list_namespaced_pod(namespace=namespace, label_selector=selector).items
         ready_pods = sorted((pod for pod in pods if self._pod_ready(pod)), key=lambda pod: pod.metadata.name)
+        fallback_control_plane_node = None
         for pod in ready_pods:
             node_name = pod.spec.node_name
             node = self.core_v1.read_node(name=node_name)
@@ -57,8 +58,13 @@ class ClockSkewObserver:
                 for role in ("node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master")
             ):
                 return node_name
+            if fallback_control_plane_node is None:
+                fallback_control_plane_node = node_name
 
-        raise RuntimeError(f"No Ready worker pod found for Deployment {namespace}/{target_deployment}")
+        if fallback_control_plane_node is not None:
+            return fallback_control_plane_node
+
+        raise RuntimeError(f"No Ready pod found for Deployment {namespace}/{target_deployment}")
 
     @staticmethod
     def _pod_body(name: str, node_name: str, selector_value: str) -> dict:

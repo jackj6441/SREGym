@@ -6,6 +6,11 @@ same worker as the problem's frontend Pod. Chaos Mesh then applies a `+5m`
 non-critical, SREGym-owned workload; it does not alter application Pods, the
 Kubernetes control plane, or node clocks.
 
+Placement prefers a non-control-plane worker. On a single-node cluster where
+the Ready frontend Pod necessarily runs on the control-plane node, the observer
+falls back to that same node; the time shift remains scoped to the observer
+container.
+
 The observer writes its UTC time every five seconds. TimeChaos affects the
 observer's PID 1 and its child processes, so inspect the container logs rather
 than using `kubectl exec date` to see the offset.

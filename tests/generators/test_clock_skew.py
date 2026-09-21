@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from sregym.generators.noise.impl.clock_skew import DEFAULT_DURATION_SECONDS, ClockSkewObserver
 
 
@@ -56,6 +58,45 @@ def test_observer_is_colocated_with_the_ready_target_pod_and_has_an_exact_select
     assert container["args"] == ["while true; do date -u '+%Y-%m-%dT%H:%M:%SZ'; sleep 5; done"]
     assert resource["node"] == "kind-worker2"
     assert resource["namespace"] == "hotel-reservation"
+
+
+def test_observer_falls_back_to_ready_control_plane_target_on_single_node_cluster():
+    observer, core, _ = _observer([_pod(node="single-control-plane")])
+    core.read_node.return_value.metadata.labels = {"node-role.kubernetes.io/control-plane": ""}
+
+    resource = observer.inject(namespace="hotel-reservation", target_deployment="frontend")
+
+    assert resource["node"] == "single-control-plane"
+    body = core.create_namespaced_pod.call_args.kwargs["body"]
+    assert body["spec"]["nodeSelector"] == {"kubernetes.io/hostname": "single-control-plane"}
+
+
+def test_observer_prefers_ready_worker_even_when_control_plane_pod_sorts_first():
+    observer, core, _ = _observer(
+        [
+            _pod(name="a-frontend-control-plane", node="control-plane"),
+            _pod(name="z-frontend-worker", node="worker"),
+        ]
+    )
+
+    def read_node(*, name):
+        labels = {"node-role.kubernetes.io/control-plane": ""} if name == "control-plane" else {}
+        return SimpleNamespace(metadata=SimpleNamespace(labels=labels))
+
+    core.read_node.side_effect = read_node
+
+    resource = observer.inject(namespace="hotel-reservation", target_deployment="frontend")
+
+    assert resource["node"] == "worker"
+    body = core.create_namespaced_pod.call_args.kwargs["body"]
+    assert body["spec"]["nodeSelector"] == {"kubernetes.io/hostname": "worker"}
+
+
+def test_observer_rejects_deployment_without_a_ready_target_pod():
+    observer, _, _ = _observer([_pod(phase="Pending", ready=False)])
+
+    with pytest.raises(RuntimeError, match="No Ready pod found for Deployment hotel-reservation/frontend"):
+        observer.inject(namespace="hotel-reservation", target_deployment="frontend")
 
 
 def test_time_chaos_spec_selects_only_the_owned_observer():
