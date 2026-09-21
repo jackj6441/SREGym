@@ -35,6 +35,8 @@ CHAOS_NAMESPACE = "chaos-mesh"
 MAX_CONCURRENT = 2  # experiments per injection cycle
 DURATION = 120  # seconds each experiment lives
 COOLDOWN = 300  # seconds between injection cycles
+CLEANUP_TIMEOUT_SECONDS = 30
+CLEANUP_FINALIZER_GRACE_SECONDS = 5
 
 
 class NoiseManager:
@@ -96,8 +98,10 @@ class NoiseManager:
                 self._maybe_inject()
             except Exception:
                 self.running = False
-                self._cleanup_experiments()
-                self._cleanup_workloads()
+                if self._cleanup_experiments():
+                    self._cleanup_workloads()
+                else:
+                    self._force_remove_all_chaos_resources()
                 raise
             logger.info("Deterministic noise injection started.")
             return
@@ -119,7 +123,9 @@ class NoiseManager:
         if self._background_thread:
             self._background_thread.join(timeout=5)
             self._background_thread = None
-        self._cleanup_experiments()
+        if not self._cleanup_experiments():
+            self._force_remove_all_chaos_resources()
+            raise RuntimeError("Noise experiments could not be confirmed deleted; observer workload was left in place")
         self._cleanup_workloads()
         # Strip finalizers from any remaining chaos-mesh CRs so the namespace
         # can terminate cleanly when reconcile_to_baseline deletes it.
@@ -168,6 +174,7 @@ class NoiseManager:
                 },
                 raise_on_error=True,
             )
+            observer.wait_for_treatment_effect(resource)
             with self._lock:
                 self._deterministic_injected = True
             self._last_injection_time = time.time()
@@ -213,7 +220,8 @@ class NoiseManager:
                 yaml.dump(crd, tmp)
                 tmp_path = tmp.name
 
-            out = self.kubectl.exec_command(f"kubectl apply -f {tmp_path}")
+            executor = self.kubectl.exec_command_checked if raise_on_error else self.kubectl.exec_command
+            out = executor(f"kubectl apply -f {tmp_path}")
             logger.info(f"Applied noise experiment {name}: {out}")
 
             with self._lock:
@@ -263,34 +271,49 @@ class NoiseManager:
 
     # ── Cleanup ───────────────────────────────────────────────────────
 
-    def _cleanup_experiments(self):
+    def _cleanup_experiments(self) -> bool:
+        """Delete tracked Chaos Mesh resources and retain any that cannot be confirmed gone."""
         with self._lock:
-            for exp in self.active_experiments:
-                try:
-                    # --wait=false returns as soon as deletionTimestamp is set,
-                    # so a stuck chaos-mesh finalizer can't block the caller.
-                    cmd = (
-                        f"kubectl delete {exp['kind']} {exp['name']} -n {CHAOS_NAMESPACE} "
-                        f"--ignore-not-found --wait=false --timeout=30s"
-                    )
-                    self.kubectl.exec_command(cmd)
+            active = self.active_experiments
+            self.active_experiments = []
 
-                    # If the CR is still present, its finalizer is stuck
-                    # (common when the target pod is in CrashLoopBackOff and
-                    # chaos-mesh can't flush ip sets). Strip it so GC completes.
-                    remaining = self.kubectl.exec_command(
+        remaining_experiments = []
+        for exp in active:
+            try:
+                # Start deletion without blocking on a potentially stuck
+                # Chaos Mesh finalizer, then confirm that the CR actually
+                # disappears before its target Pod is removed.
+                self.kubectl.exec_command_checked(
+                    f"kubectl delete {exp['kind']} {exp['name']} -n {CHAOS_NAMESPACE} "
+                    f"--ignore-not-found --wait=false --timeout={CLEANUP_TIMEOUT_SECONDS}s"
+                )
+                deadline = time.monotonic() + CLEANUP_TIMEOUT_SECONDS
+                finalizer_stripped = False
+                while True:
+                    current = self.kubectl.exec_command_checked(
                         f"kubectl get {exp['kind']} {exp['name']} -n {CHAOS_NAMESPACE} --ignore-not-found -o name"
                     )
-                    if remaining and remaining.strip():
+                    if not current or not current.strip():
+                        logger.info(f"Cleaned up noise experiment {exp['name']}")
+                        break
+                    if not finalizer_stripped and time.monotonic() >= deadline - CLEANUP_FINALIZER_GRACE_SECONDS:
                         logger.warning(f"Finalizer stuck on {exp['name']}; stripping to force removal")
-                        self.kubectl.exec_command(
+                        self.kubectl.exec_command_checked(
                             f"kubectl patch {exp['kind']} {exp['name']} -n {CHAOS_NAMESPACE} "
                             f'--type=merge -p \'{{"metadata":{{"finalizers":[]}}}}\''
                         )
-                    logger.info(f"Cleaned up noise experiment {exp['name']}")
-                except Exception as e:
-                    logger.error(f"Failed to clean up noise experiment {exp['name']}: {e}")
-            self.active_experiments.clear()
+                        finalizer_stripped = True
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"Timed out deleting noise experiment {exp['name']}")
+                    time.sleep(1)
+            except Exception as e:
+                logger.error(f"Failed to clean up noise experiment {exp['name']}: {e}")
+                remaining_experiments.append(exp)
+
+        if remaining_experiments:
+            with self._lock:
+                self.active_experiments.extend(remaining_experiments)
+        return not remaining_experiments
 
     def _force_remove_all_chaos_resources(self):
         try:

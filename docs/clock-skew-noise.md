@@ -1,9 +1,21 @@
 # Clock-skew noise profile
 
-The `clock-skew` profile creates one `analytics-clock-observer` Pod on the
-same worker as the problem's frontend Pod. Chaos Mesh then applies a `+5m`
-`CLOCK_REALTIME` offset to only the observer container. The Pod is a
-non-critical, SREGym-owned workload; it does not alter application Pods, the
+The `clock-skew` profile creates one non-critical, SREGym-owned
+`analytics-clock-observer` Pod on the same worker as the problem's frontend
+Pod. It is a real but isolated fault: Chaos Mesh applies a `+5m`
+`CLOCK_REALTIME` offset to only the Pod's `observer` container.
+
+The Pod has two containers that share a small local volume:
+
+- `reference` writes the unmodified epoch time once per second.
+- `observer` compares its own clock to that reference. After three consecutive
+  samples exceed four minutes of drift, it records `CLOCK_SKEW_FAULT` in its
+  logs and fails its readiness probe.
+
+Therefore the observable noise symptom is a Running but `NotReady` observer
+Pod (normally `1/2 Ready`) with a measured clock delta. It is intentionally
+different from the benchmark's primary Service-selector symptom: it does not
+change application Pods, Services, EndpointSlices, application traffic, the
 Kubernetes control plane, or node clocks.
 
 Placement prefers a non-control-plane worker. On a single-node cluster where
@@ -11,9 +23,12 @@ the Ready frontend Pod necessarily runs on the control-plane node, the observer
 falls back to that same node; the time shift remains scoped to the observer
 container.
 
-The observer writes its UTC time every five seconds. TimeChaos affects the
-observer's PID 1 and its child processes, so inspect the container logs rather
-than using `kubectl exec date` to see the offset.
+The manager first waits for the two-container Pod to be healthy, applies
+TimeChaos, then requires both the `NotReady` symptom and the clock-delta log
+marker before the agent can start. If the cluster does not actually apply the
+time offset, setup fails rather than running a case with fake or silent noise.
+It attempts cleanup; if Chaos Mesh resource deletion cannot be confirmed, that
+cleanup failure is surfaced rather than deleting the observer first.
 
 ## Run
 
@@ -47,9 +62,16 @@ the treatment expire before mitigation finishes.
 kubectl get pods -n hotel-reservation -l sregym.io/noise-profile=clock-skew -o wide
 kubectl get timechaos -n chaos-mesh
 kubectl describe timechaos -n chaos-mesh <timechaos-name>
-kubectl logs -n hotel-reservation <analytics-clock-observer-pod>
+kubectl get pod -n hotel-reservation <analytics-clock-observer-pod>
+kubectl logs -n hotel-reservation <analytics-clock-observer-pod> -c observer
 kubectl get pods -n chaos-mesh
 ```
+
+Expected evidence after setup is a Running observer Pod with `READY` equal to
+`1/2`, plus a log line like `CLOCK_SKEW_FAULT offset_seconds=300`. The
+`reference` container stays Ready; only `observer` is selected by TimeChaos.
+Do not treat this isolated noise workload as the root cause or modify it while
+mitigating the benchmark fault.
 
 The TimeChaos resource selects the observer by a unique `sregym.io/noise-run`
 label. Cleanup deletes the TimeChaos resource before deleting the observer

@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from kubernetes.client.rest import ApiException
 
 from sregym.generators.noise.impl.clock_skew import DEFAULT_DURATION_SECONDS, ClockSkewObserver
 
@@ -28,7 +29,11 @@ def _observer(pods):
     core.read_namespaced_pod.return_value = SimpleNamespace(
         status=SimpleNamespace(
             phase="Running",
-            container_statuses=[SimpleNamespace(state=SimpleNamespace(running=SimpleNamespace()))],
+            conditions=[SimpleNamespace(type="Ready", status="True")],
+            container_statuses=[
+                SimpleNamespace(name="observer", ready=True, state=SimpleNamespace(running=SimpleNamespace())),
+                SimpleNamespace(name="reference", ready=True, state=SimpleNamespace(running=SimpleNamespace())),
+            ],
         )
     )
     apps = Mock()
@@ -53,9 +58,16 @@ def test_observer_is_colocated_with_the_ready_target_pod_and_has_an_exact_select
     assert body["spec"]["automountServiceAccountToken"] is False
     assert body["metadata"]["labels"]["sregym.io/noise-profile"] == "clock-skew"
     assert body["metadata"]["labels"]["sregym.io/noise-run"] == resource["selector_value"]
-    container = body["spec"]["containers"][0]
-    assert container["name"] == "observer"
-    assert container["args"] == ["while true; do date -u '+%Y-%m-%dT%H:%M:%SZ'; sleep 5; done"]
+    containers = {container["name"]: container for container in body["spec"]["containers"]}
+    assert set(containers) == {"observer", "reference"}
+    assert body["spec"]["volumes"] == [{"name": "clock-reference", "emptyDir": {}}]
+    assert containers["reference"]["volumeMounts"] == [{"name": "clock-reference", "mountPath": "/clock-reference"}]
+    assert containers["observer"]["volumeMounts"] == [{"name": "clock-reference", "mountPath": "/clock-reference"}]
+    assert containers["observer"]["readinessProbe"] == {
+        "exec": {"command": ["sh", "-ec", "test ! -f /clock-reference/clock-skew-active"]},
+        "initialDelaySeconds": 1,
+        "periodSeconds": 2,
+    }
     assert resource["node"] == "kind-worker2"
     assert resource["namespace"] == "hotel-reservation"
 
@@ -119,3 +131,96 @@ def test_time_chaos_spec_selects_only_the_owned_observer():
         "timeOffset": "+5m",
         "duration": "120s",
     }
+
+
+def test_observer_accepts_only_a_real_clock_skew_fault_signal():
+    observer, core, _ = _observer([_pod()])
+    resource = {
+        "name": "analytics-clock-observer-abc123",
+        "namespace": "hotel-reservation",
+        "node": "kind-worker2",
+        "selector_value": "abc123",
+    }
+    core.read_namespaced_pod.return_value = SimpleNamespace(
+        status=SimpleNamespace(
+            phase="Running",
+            conditions=[SimpleNamespace(type="Ready", status="False")],
+            container_statuses=[
+                SimpleNamespace(name="observer", ready=False, state=SimpleNamespace(running=SimpleNamespace())),
+                SimpleNamespace(name="reference", ready=True, state=SimpleNamespace(running=SimpleNamespace())),
+            ],
+        )
+    )
+    core.read_namespaced_pod_log.return_value = "CLOCK_SKEW_FAULT offset_seconds=300\n"
+
+    observer.wait_for_treatment_effect(resource)
+
+    core.read_namespaced_pod_log.assert_called_with(
+        name=resource["name"], namespace=resource["namespace"], container="observer", tail_lines=20
+    )
+
+
+def test_observer_rejects_an_unready_pod_without_clock_skew_evidence():
+    observer, core, _ = _observer([_pod()])
+    observer.treatment_effect_timeout_seconds = 0
+    resource = {
+        "name": "analytics-clock-observer-abc123",
+        "namespace": "hotel-reservation",
+        "node": "kind-worker2",
+        "selector_value": "abc123",
+    }
+    core.read_namespaced_pod.return_value = SimpleNamespace(
+        status=SimpleNamespace(
+            phase="Running",
+            conditions=[SimpleNamespace(type="Ready", status="False")],
+            container_statuses=[
+                SimpleNamespace(name="observer", ready=False, state=SimpleNamespace(running=SimpleNamespace())),
+                SimpleNamespace(name="reference", ready=True, state=SimpleNamespace(running=SimpleNamespace())),
+            ],
+        )
+    )
+    core.read_namespaced_pod_log.return_value = "observer still starting\n"
+
+    with pytest.raises(TimeoutError, match="did not become observable"):
+        observer.wait_for_treatment_effect(resource)
+
+
+def test_observer_retries_a_transient_kubernetes_read_failure_before_accepting_the_fault(monkeypatch):
+    observer, core, _ = _observer([_pod()])
+    resource = {
+        "name": "analytics-clock-observer-abc123",
+        "namespace": "hotel-reservation",
+        "node": "kind-worker2",
+        "selector_value": "abc123",
+    }
+    faulted_pod = SimpleNamespace(
+        status=SimpleNamespace(
+            phase="Running",
+            conditions=[SimpleNamespace(type="Ready", status="False")],
+            container_statuses=[
+                SimpleNamespace(name="observer", ready=False, state=SimpleNamespace(running=SimpleNamespace())),
+                SimpleNamespace(name="reference", ready=True, state=SimpleNamespace(running=SimpleNamespace())),
+            ],
+        )
+    )
+    core.read_namespaced_pod.side_effect = [ApiException(status=429, reason="Too Many Requests"), faulted_pod]
+    core.read_namespaced_pod_log.return_value = "CLOCK_SKEW_FAULT offset_seconds=300\n"
+    monkeypatch.setattr("sregym.generators.noise.impl.clock_skew.time.sleep", lambda _: None)
+
+    observer.wait_for_treatment_effect(resource)
+
+    assert core.read_namespaced_pod.call_count == 2
+
+
+def test_observer_fails_immediately_when_the_treatment_pod_disappears():
+    observer, core, _ = _observer([_pod()])
+    resource = {
+        "name": "analytics-clock-observer-abc123",
+        "namespace": "hotel-reservation",
+        "node": "kind-worker2",
+        "selector_value": "abc123",
+    }
+    core.read_namespaced_pod.side_effect = ApiException(status=404, reason="Not Found")
+
+    with pytest.raises(RuntimeError, match="disappeared"):
+        observer.wait_for_treatment_effect(resource)

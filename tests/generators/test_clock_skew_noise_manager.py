@@ -48,13 +48,85 @@ def test_clock_profile_creates_the_observer_and_time_chaos_before_the_agent_star
 
     ensure_chaos.assert_called_once_with()
     observer.inject.assert_called_once_with(namespace="hotel-reservation", target_deployment="frontend")
+    observer.wait_for_treatment_effect.assert_called_once_with(resource)
     assert noise.running is True
     assert noise.active_workloads == [resource]
     assert noise.active_experiments[0]["kind"] == "TimeChaos"
     assert noise._background_thread is None
-    kubectl.exec_command.assert_called_once()
-    applied = kubectl.exec_command.call_args.args[0]
+    kubectl.exec_command_checked.assert_called_once()
+    applied = kubectl.exec_command_checked.call_args.args[0]
     assert applied.startswith("kubectl apply -f ")
+
+
+def test_clock_profile_fails_closed_when_time_chaos_does_not_create_the_expected_fault(noise_manager, monkeypatch):
+    noise, kubectl = noise_manager
+    resource = {
+        "name": "analytics-clock-observer-run",
+        "namespace": "hotel-reservation",
+        "node": "kind-worker2",
+        "selector_value": "run",
+    }
+    observer = Mock()
+    observer.inject.return_value = resource
+    observer.wait_for_treatment_effect.side_effect = TimeoutError("clock skew fault did not become observable")
+    observer_type = Mock(return_value=observer)
+    observer_type.time_chaos_spec.return_value = {"mode": "one"}
+    monkeypatch.setattr(manager, "ClockSkewObserver", observer_type)
+    monkeypatch.setattr(noise, "_ensure_chaos_mesh_installed", lambda: setattr(noise, "_chaos_mesh_ready", True))
+    monkeypatch.setattr(noise, "_force_remove_all_chaos_resources", Mock())
+    kubectl.exec_command_checked.return_value = ""
+    noise.set_problem_context(
+        {
+            "namespace": "hotel-reservation",
+            "target_deployment": "frontend",
+            "noise_profile": CLOCK_SKEW_PROFILE,
+            "noise_duration_seconds": 3600,
+        }
+    )
+
+    with pytest.raises(TimeoutError, match="did not become observable"):
+        noise.start()
+
+    assert noise.running is False
+    observer.wait_for_treatment_effect.assert_called_once_with(resource)
+    observer.delete.assert_called_once_with(resource)
+    commands = [call.args[0] for call in kubectl.exec_command_checked.call_args_list]
+    assert commands[0].startswith("kubectl apply -f ")
+    assert any("kubectl delete TimeChaos" in command for command in commands)
+
+
+def test_clock_profile_fails_fast_when_time_chaos_apply_is_rejected(noise_manager, monkeypatch):
+    noise, kubectl = noise_manager
+    resource = {
+        "name": "analytics-clock-observer-run",
+        "namespace": "hotel-reservation",
+        "node": "kind-worker2",
+        "selector_value": "run",
+    }
+    observer = Mock()
+    observer.inject.return_value = resource
+    observer_type = Mock(return_value=observer)
+    observer_type.time_chaos_spec.return_value = {"mode": "one"}
+    monkeypatch.setattr(manager, "ClockSkewObserver", observer_type)
+    monkeypatch.setattr(noise, "_ensure_chaos_mesh_installed", lambda: setattr(noise, "_chaos_mesh_ready", True))
+    monkeypatch.setattr(noise, "_force_remove_all_chaos_resources", Mock())
+    kubectl.exec_command_checked.side_effect = RuntimeError("TimeChaos admission rejected")
+    noise.set_problem_context(
+        {
+            "namespace": "hotel-reservation",
+            "target_deployment": "frontend",
+            "noise_profile": CLOCK_SKEW_PROFILE,
+            "noise_duration_seconds": 3600,
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="admission rejected"):
+        noise.start()
+
+    assert noise.running is False
+    assert noise.active_experiments == []
+    observer.wait_for_treatment_effect.assert_not_called()
+    observer.delete.assert_called_once_with(resource)
 
 
 def test_clock_profile_does_not_reinject_after_the_random_noise_cooldown(noise_manager, monkeypatch):
@@ -102,7 +174,7 @@ def test_clock_profile_does_not_reinject_after_the_random_noise_cooldown(noise_m
     assert noise.active_workloads[0] is workload_identity
     assert noise.active_experiments == [experiment_identity]
     assert noise.active_experiments[0] is experiment_identity
-    kubectl.exec_command.assert_called_once()
+    kubectl.exec_command_checked.assert_called_once()
     cleanup_experiments.assert_not_called()
     cleanup_workloads.assert_not_called()
 
@@ -118,6 +190,7 @@ def test_clock_profile_stop_removes_the_time_chaos_before_its_owned_observer(noi
     observer = Mock()
     monkeypatch.setattr(manager, "ClockSkewObserver", Mock(return_value=observer))
     monkeypatch.setattr(noise, "_force_remove_all_chaos_resources", Mock())
+    kubectl.exec_command_checked.return_value = ""
     noise.noise_profile = CLOCK_SKEW_PROFILE
     noise.running = True
     noise.active_workloads = [resource]
@@ -126,7 +199,7 @@ def test_clock_profile_stop_removes_the_time_chaos_before_its_owned_observer(noi
     noise.stop()
 
     observer.delete.assert_called_once_with(resource)
-    delete_command = kubectl.exec_command.call_args_list[0].args[0]
+    delete_command = kubectl.exec_command_checked.call_args_list[0].args[0]
     assert delete_command.startswith("kubectl delete TimeChaos noise-clock-skew-123")
 
 
@@ -145,7 +218,7 @@ def test_clock_profile_removes_the_temporary_manifest_when_apply_fails(noise_man
             self.handle.close()
 
     monkeypatch.setattr(manager.tempfile, "NamedTemporaryFile", lambda **_kwargs: _Manifest())
-    kubectl.exec_command.side_effect = RuntimeError("kubectl unavailable")
+    kubectl.exec_command_checked.side_effect = RuntimeError("kubectl unavailable")
     noise.target_namespace = "hotel-reservation"
 
     with pytest.raises(RuntimeError, match="kubectl unavailable"):
