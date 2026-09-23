@@ -12,6 +12,7 @@ import yaml
 
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.generators.images import (
+    CLOCK_SKEW_OBSERVER_IMAGE,
     HOTEL_CORRELATED_FAULT_IMAGE,
     HOTEL_GEO_MISCONFIG_IMAGE,
     STRESS_IMAGE,
@@ -35,6 +36,7 @@ def test_fault_and_stress_helpers_use_the_recorded_releases():
     assert IMAGES["hotel-reservation-1"] == HOTEL_GEO_MISCONFIG_IMAGE
     assert IMAGES["hotel-reservation-2"] == HOTEL_CORRELATED_FAULT_IMAGE
     assert IMAGES["stress"] == STRESS_IMAGE
+    assert IMAGES["clock-skew-observer"] == CLOCK_SKEW_OBSERVER_IMAGE
     assert IMAGES["kube-proxy-1"] == WORKLOAD_IMBALANCE_PROXY_IMAGE
 
 

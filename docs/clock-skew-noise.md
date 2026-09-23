@@ -7,10 +7,17 @@ Pod. It is a real but isolated fault: Chaos Mesh applies a `+5m`
 
 The Pod has two containers that share a small local volume:
 
-- `reference` writes the unmodified epoch time once per second.
-- `observer` compares its own clock to that reference. After three consecutive
-  samples exceed four minutes of drift, it records `CLOCK_SKEW_FAULT` in its
-  logs and fails its readiness probe.
+- Both containers run the SREGym `clock-skew-observer` native binary from a
+  digest-pinned multiarch image. `reference` writes its unmodified epoch time;
+  `observer`, which starts before TimeChaos is applied, repeatedly calls
+  `clock_gettime(CLOCK_REALTIME)` in the same long-lived process.
+- After three consecutive samples exceed four minutes of drift, `observer`
+  records `CLOCK_SKEW_FAULT` in its logs and fails its readiness probe.
+
+The observer intentionally does not fork `date` or another short-lived child
+process to measure time: on some Chaos Mesh/container-runtime combinations,
+processes created after injection do not inherit the time shift. The long-lived
+native process is what makes this fault measurable on CloudLab.
 
 Therefore the observable noise symptom is a Running but `NotReady` observer
 Pod (normally `1/2 Ready`) with a measured clock delta. It is intentionally

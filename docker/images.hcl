@@ -36,6 +36,7 @@ group "default" {
     "kube-proxy-1",
     "blueprint-hotel",
     "stress",
+    "clock-skew-observer",
     "openwhisk",
   ]
 }
@@ -68,6 +69,7 @@ group "publish" {
     "kube-proxy-1",
     "blueprint-hotel",
     "stress",
+    "clock-skew-observer",
     "openwhisk",
   ]
 }
@@ -145,6 +147,12 @@ target "hotel-reservation" {
   inherits = ["_common"]
   context = "SREGym-applications/hotelReservation"
   tags = ["${REGISTRY}/hotel-reservation:${IMAGE_TAG}"]
+}
+
+target "clock-skew-observer" {
+  inherits = ["_common"]
+  context = "docker/clock-skew-observer"
+  tags = ["${REGISTRY}/sregym-clock-skew-observer:${IMAGE_TAG}"]
 }
 
 target "locust-exporter" {

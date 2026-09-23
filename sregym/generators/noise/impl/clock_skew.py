@@ -7,7 +7,7 @@ import uuid
 
 from kubernetes.client.rest import ApiException
 
-from sregym.generators.images import STRESS_IMAGE
+from sregym.generators.images import CLOCK_SKEW_OBSERVER_IMAGE
 from sregym.service.kubectl import KubeCtl
 
 logger = logging.getLogger(__name__)
@@ -139,16 +139,10 @@ class ClockSkewObserver:
                 "containers": [
                     {
                         "name": REFERENCE_CONTAINER,
-                        "image": STRESS_IMAGE,
+                        "image": CLOCK_SKEW_OBSERVER_IMAGE,
                         "imagePullPolicy": "IfNotPresent",
-                        "command": ["/bin/sh", "-ec"],
-                        "args": [
-                            "while true; do "
-                            f"date +%s > {CLOCK_REFERENCE_PATH}/epoch.tmp && "
-                            f"mv {CLOCK_REFERENCE_PATH}/epoch.tmp {CLOCK_REFERENCE_PATH}/epoch; "
-                            "sleep 1; "
-                            "done"
-                        ],
+                        "command": ["/usr/local/bin/clock-skew-observer", "reference"],
+                        "args": [f"{CLOCK_REFERENCE_PATH}/epoch"],
                         "volumeMounts": [volume_mount],
                         "resources": {
                             "requests": {"cpu": "10m", "memory": "16Mi"},
@@ -157,32 +151,23 @@ class ClockSkewObserver:
                     },
                     {
                         "name": OBSERVER_CONTAINER,
-                        "image": STRESS_IMAGE,
+                        "image": CLOCK_SKEW_OBSERVER_IMAGE,
                         "imagePullPolicy": "IfNotPresent",
-                        "command": ["/bin/sh", "-c"],
+                        "command": ["/usr/local/bin/clock-skew-observer", "observe"],
                         "args": [
-                            "consecutive=0; reported=0; "
-                            "while true; do "
-                            f"reference=$(cat {CLOCK_REFERENCE_PATH}/epoch 2>/dev/null || true); "
-                            "observed=$(date +%s); "
-                            'if [ -n "$reference" ]; then '
-                            "delta=$((observed - reference)); "
-                            'absolute=$delta; if [ "$absolute" -lt 0 ]; then absolute=$((-absolute)); fi; '
-                            f'if [ "$absolute" -ge {CLOCK_SKEW_THRESHOLD_SECONDS} ]; then '
-                            "consecutive=$((consecutive + 1)); "
-                            "else consecutive=0; reported=0; "
-                            f"rm -f {CLOCK_SKEW_MARKER}; fi; "
-                            'if [ "$consecutive" -ge 3 ]; then '
-                            f"touch {CLOCK_SKEW_MARKER}; "
-                            'if [ "$reported" -eq 0 ]; then '
-                            f"echo '{CLOCK_SKEW_FAULT_LOG} offset_seconds='\"$delta\"; reported=1; fi; "
-                            "fi; "
-                            "fi; sleep 1; "
-                            "done"
+                            f"{CLOCK_REFERENCE_PATH}/epoch",
+                            CLOCK_SKEW_MARKER,
+                            str(CLOCK_SKEW_THRESHOLD_SECONDS),
                         ],
                         "volumeMounts": [volume_mount],
                         "readinessProbe": {
-                            "exec": {"command": ["sh", "-ec", f"test ! -f {CLOCK_SKEW_MARKER}"]},
+                            "exec": {
+                                "command": [
+                                    "/usr/local/bin/clock-skew-observer",
+                                    "healthcheck",
+                                    CLOCK_SKEW_MARKER,
+                                ]
+                            },
                             "initialDelaySeconds": 1,
                             "periodSeconds": 2,
                         },

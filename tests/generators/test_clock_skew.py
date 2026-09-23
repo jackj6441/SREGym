@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import pytest
 from kubernetes.client.rest import ApiException
 
+from sregym.generators.images import CLOCK_SKEW_OBSERVER_IMAGE
 from sregym.generators.noise.impl.clock_skew import DEFAULT_DURATION_SECONDS, ClockSkewObserver
 
 
@@ -63,8 +64,14 @@ def test_observer_is_colocated_with_the_ready_target_pod_and_has_an_exact_select
     assert body["spec"]["volumes"] == [{"name": "clock-reference", "emptyDir": {}}]
     assert containers["reference"]["volumeMounts"] == [{"name": "clock-reference", "mountPath": "/clock-reference"}]
     assert containers["observer"]["volumeMounts"] == [{"name": "clock-reference", "mountPath": "/clock-reference"}]
+    assert containers["reference"]["image"] == CLOCK_SKEW_OBSERVER_IMAGE
+    assert containers["observer"]["image"] == CLOCK_SKEW_OBSERVER_IMAGE
+    assert containers["reference"]["command"] == ["/usr/local/bin/clock-skew-observer", "reference"]
+    assert containers["observer"]["command"] == ["/usr/local/bin/clock-skew-observer", "observe"]
     assert containers["observer"]["readinessProbe"] == {
-        "exec": {"command": ["sh", "-ec", "test ! -f /clock-reference/clock-skew-active"]},
+        "exec": {
+            "command": ["/usr/local/bin/clock-skew-observer", "healthcheck", "/clock-reference/clock-skew-active"]
+        },
         "initialDelaySeconds": 1,
         "periodSeconds": 2,
     }
