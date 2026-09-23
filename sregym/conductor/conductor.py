@@ -299,6 +299,14 @@ class Conductor:
         self.logger.info("[ENV] Injected fault")
         self.fault_injected = True
 
+        # A problem may supply a post-injection preflight.  This is framework
+        # evidence only: it is recorded for result validity and never exposed
+        # through the agent-facing API or prompt.
+        validate_fault_preflight = getattr(problem, "validate_fault_preflight", None)
+        if callable(validate_fault_preflight):
+            validate_fault_preflight()
+            self.results["fault_preflight"] = "passed"
+
         # Prepare diagnosis checkpoint if available, after fault injection but before agent stages
         if (
             hasattr(problem, "diagnosis_oracle")
@@ -693,6 +701,7 @@ class Conductor:
                 }
                 nm.set_problem_context(context)
                 nm.start()
+                self.results["noise_preflight"] = "passed"
             except Exception as e:
                 self.logger.warning(f"Failed to update NoiseManager context: {e}")
                 if self.config.noise_profile is not None:
@@ -1066,6 +1075,7 @@ class Conductor:
         reason: str,
         *,
         agent_return_code: int | None = None,
+        incomplete_class: str | None = None,
     ) -> None:
         """Record why an attempt ended without all configured stage results."""
         missing = self.missing_submission_stages()
@@ -1077,6 +1087,8 @@ class Conductor:
         self.results["incomplete_reason"] = reason
         self.results["incomplete_stage"] = current_stage
         self.results["missing_stages"] = ",".join(missing)
+        if incomplete_class is not None:
+            self.results["incomplete_class"] = incomplete_class
         if agent_return_code is not None:
             self.results["agent_return_code"] = agent_return_code
 

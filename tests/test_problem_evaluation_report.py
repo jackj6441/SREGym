@@ -77,6 +77,27 @@ def test_report_explains_an_explicit_incomplete_attempt():
     assert "⚠️ **Inconclusive**" in report
 
 
+def test_report_distinguishes_a_tool_policy_infrastructure_failure():
+    report = build_report(
+        [
+            {
+                "problem_id": "example_problem",
+                "attempt": "1",
+                "run_status": "incomplete",
+                "incomplete_class": "infrastructure",
+                "incomplete_reason": "agent_tool_policy_rejected",
+                "incomplete_stage": "diagnosis",
+            }
+        ],
+        problem_id="example_problem",
+        model="glm-4.7",
+        requested_attempts=1,
+    )
+
+    assert "infrastructure: agent tool policy rejected at diagnosis" in report
+    assert "**Complete attempts:** 0" in report
+
+
 def test_report_includes_stage_for_an_explicit_timeout():
     rows = [
         {

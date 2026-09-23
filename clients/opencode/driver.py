@@ -156,7 +156,8 @@ def _continuation_instruction(stage: str) -> str:
         )
     return (
         f"The conductor is still waiting in the {stage} stage, so the required submission has not completed. "
-        "Continue this same session from the evidence already collected. "
+        "Continue this same session from the evidence already collected. If a tool was unavailable under the "
+        "sandbox policy, treat it only as a tool limitation and continue with the remaining available tools. "
         f"{action} Do not stop after a summary or another investigation step; complete the submission before exiting."
     )
 
@@ -272,6 +273,8 @@ def save_results(
     problem_id: str,
     return_code: int,
     usage_metrics: dict,
+    *,
+    tool_policy_denials: int = 0,
 ) -> None:
     """Save run results to JSON file."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -282,6 +285,7 @@ def save_results(
         "timestamp": timestamp,
         "return_code": return_code,
         "success": return_code == 0,
+        "tool_policy_denials": tool_policy_denials,
         "usage_metrics": usage_metrics,
     }
 
@@ -369,12 +373,20 @@ def main():
     usage_metrics = agent.get_usage_metrics()
 
     # Save results
-    save_results(logs_dir, problem_id, return_code, usage_metrics)
+    tool_policy_denials = agent.tool_policy_denial_count()
+    save_results(
+        logs_dir,
+        problem_id,
+        return_code,
+        usage_metrics,
+        tool_policy_denials=tool_policy_denials,
+    )
 
     # Log summary
     logger.info("=" * 80)
     logger.info("OpenCode execution completed")
     logger.info(f"Return code: {return_code}")
+    logger.info(f"Tool policy denials: {tool_policy_denials}")
     logger.info(f"Usage metrics: {usage_metrics}")
     logger.info("=" * 80)
 

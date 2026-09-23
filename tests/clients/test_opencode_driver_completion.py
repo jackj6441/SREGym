@@ -21,6 +21,22 @@ def test_continues_same_session_until_both_stages_are_submitted(monkeypatch):
     agent.export_session.assert_called_once_with()
 
 
+def test_policy_denial_does_not_prevent_same_session_continuation(monkeypatch):
+    """A denied tool is a recoverable sandbox event, not a terminal stage outcome."""
+    agent = Mock()
+    agent.run.return_value = 0
+    agent._get_session_id.return_value = "ses-after-denial"
+    stages = iter(["diagnosis", "mitigation", "tearing_down"])
+    monkeypatch.setattr(driver, "get_current_stage", lambda: next(stages))
+
+    result = driver.run_until_conductor_finishes(agent, "initial task", max_continuations=3)
+
+    assert result == 0
+    diagnosis_retry = agent.run.call_args_list[1].args[0]
+    assert "sandbox policy" in diagnosis_retry
+    assert agent.run.call_args_list[1].kwargs == {"export_session": False, "session_id": "ses-after-denial"}
+
+
 def test_returns_failure_after_bounded_no_submission_retries(monkeypatch):
     agent = Mock()
     agent.run.return_value = 0

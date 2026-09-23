@@ -5,7 +5,15 @@ import pytest
 from kubernetes.client.rest import ApiException
 
 from sregym.generators.images import CLOCK_SKEW_OBSERVER_IMAGE
-from sregym.generators.noise.impl.clock_skew import DEFAULT_DURATION_SECONDS, ClockSkewObserver
+from sregym.generators.noise.impl.clock_skew import (
+    DEFAULT_DURATION_SECONDS,
+    INDEXER_BINARY,
+    OBSERVER_CONTAINER,
+    REFERENCE_CONTAINER,
+    RUN_LABEL,
+    WORKLOAD_NAME,
+    ClockSkewObserver,
+)
 
 
 def test_default_duration_covers_a_two_stage_agent_attempt():
@@ -32,8 +40,8 @@ def _observer(pods):
             phase="Running",
             conditions=[SimpleNamespace(type="Ready", status="True")],
             container_statuses=[
-                SimpleNamespace(name="observer", ready=True, state=SimpleNamespace(running=SimpleNamespace())),
-                SimpleNamespace(name="reference", ready=True, state=SimpleNamespace(running=SimpleNamespace())),
+                SimpleNamespace(name=OBSERVER_CONTAINER, ready=True, state=SimpleNamespace(running=SimpleNamespace())),
+                SimpleNamespace(name=REFERENCE_CONTAINER, ready=True, state=SimpleNamespace(running=SimpleNamespace())),
             ],
         )
     )
@@ -53,25 +61,27 @@ def test_observer_is_colocated_with_the_ready_target_pod_and_has_an_exact_select
         namespace="hotel-reservation", label_selector="io.kompose.service=frontend"
     )
     body = core.create_namespaced_pod.call_args.kwargs["body"]
-    assert body["metadata"]["name"].startswith("analytics-clock-observer-")
+    assert body["metadata"]["name"].startswith(f"{WORKLOAD_NAME}-")
     assert body["spec"]["nodeSelector"] == {"kubernetes.io/hostname": "kind-worker2"}
     assert body["spec"]["restartPolicy"] == "Never"
     assert body["spec"]["automountServiceAccountToken"] is False
-    assert body["metadata"]["labels"]["sregym.io/noise-profile"] == "clock-skew"
-    assert body["metadata"]["labels"]["sregym.io/noise-run"] == resource["selector_value"]
+    assert body["metadata"]["labels"][RUN_LABEL] == resource["selector_value"]
+    assert all("noise" not in key.lower() and "sregym" not in key.lower() for key in body["metadata"]["labels"])
     containers = {container["name"]: container for container in body["spec"]["containers"]}
-    assert set(containers) == {"observer", "reference"}
+    assert set(containers) == {OBSERVER_CONTAINER, REFERENCE_CONTAINER}
     assert body["spec"]["volumes"] == [{"name": "clock-reference", "emptyDir": {}}]
-    assert containers["reference"]["volumeMounts"] == [{"name": "clock-reference", "mountPath": "/clock-reference"}]
-    assert containers["observer"]["volumeMounts"] == [{"name": "clock-reference", "mountPath": "/clock-reference"}]
-    assert containers["reference"]["image"] == CLOCK_SKEW_OBSERVER_IMAGE
-    assert containers["observer"]["image"] == CLOCK_SKEW_OBSERVER_IMAGE
-    assert containers["reference"]["command"] == ["/usr/local/bin/clock-skew-observer", "reference"]
-    assert containers["observer"]["command"] == ["/usr/local/bin/clock-skew-observer", "observe"]
-    assert containers["observer"]["readinessProbe"] == {
-        "exec": {
-            "command": ["/usr/local/bin/clock-skew-observer", "healthcheck", "/clock-reference/clock-skew-active"]
-        },
+    assert containers[REFERENCE_CONTAINER]["volumeMounts"] == [
+        {"name": "clock-reference", "mountPath": "/clock-reference"}
+    ]
+    assert containers[OBSERVER_CONTAINER]["volumeMounts"] == [
+        {"name": "clock-reference", "mountPath": "/clock-reference"}
+    ]
+    assert containers[REFERENCE_CONTAINER]["image"] == CLOCK_SKEW_OBSERVER_IMAGE
+    assert containers[OBSERVER_CONTAINER]["image"] == CLOCK_SKEW_OBSERVER_IMAGE
+    assert containers[REFERENCE_CONTAINER]["command"] == [INDEXER_BINARY, "reference"]
+    assert containers[OBSERVER_CONTAINER]["command"] == [INDEXER_BINARY, "observe"]
+    assert containers[OBSERVER_CONTAINER]["readinessProbe"] == {
+        "exec": {"command": [INDEXER_BINARY, "healthcheck", "/clock-reference/clock-skew-active"]},
         "initialDelaySeconds": 1,
         "periodSeconds": 2,
     }
@@ -120,7 +130,7 @@ def test_observer_rejects_deployment_without_a_ready_target_pod():
 
 def test_time_chaos_spec_selects_only_the_owned_observer():
     resource = {
-        "name": "analytics-clock-observer-abc123",
+        "name": f"{WORKLOAD_NAME}-abc123",
         "namespace": "hotel-reservation",
         "node": "kind-worker2",
         "selector_value": "abc123",
@@ -132,9 +142,9 @@ def test_time_chaos_spec_selects_only_the_owned_observer():
         "mode": "one",
         "selector": {
             "namespaces": ["hotel-reservation"],
-            "labelSelectors": {"sregym.io/noise-run": "abc123"},
+            "labelSelectors": {RUN_LABEL: "abc123"},
         },
-        "containerNames": ["observer"],
+        "containerNames": [OBSERVER_CONTAINER],
         "timeOffset": "+5m",
         "duration": "120s",
     }
@@ -143,7 +153,7 @@ def test_time_chaos_spec_selects_only_the_owned_observer():
 def test_observer_accepts_only_a_real_clock_skew_fault_signal():
     observer, core, _ = _observer([_pod()])
     resource = {
-        "name": "analytics-clock-observer-abc123",
+        "name": f"{WORKLOAD_NAME}-abc123",
         "namespace": "hotel-reservation",
         "node": "kind-worker2",
         "selector_value": "abc123",
@@ -153,8 +163,8 @@ def test_observer_accepts_only_a_real_clock_skew_fault_signal():
             phase="Running",
             conditions=[SimpleNamespace(type="Ready", status="False")],
             container_statuses=[
-                SimpleNamespace(name="observer", ready=False, state=SimpleNamespace(running=SimpleNamespace())),
-                SimpleNamespace(name="reference", ready=True, state=SimpleNamespace(running=SimpleNamespace())),
+                SimpleNamespace(name=OBSERVER_CONTAINER, ready=False, state=SimpleNamespace(running=SimpleNamespace())),
+                SimpleNamespace(name=REFERENCE_CONTAINER, ready=True, state=SimpleNamespace(running=SimpleNamespace())),
             ],
         )
     )
@@ -163,7 +173,7 @@ def test_observer_accepts_only_a_real_clock_skew_fault_signal():
     observer.wait_for_treatment_effect(resource)
 
     core.read_namespaced_pod_log.assert_called_with(
-        name=resource["name"], namespace=resource["namespace"], container="observer", tail_lines=20
+        name=resource["name"], namespace=resource["namespace"], container=OBSERVER_CONTAINER, tail_lines=20
     )
 
 
@@ -171,7 +181,7 @@ def test_observer_rejects_an_unready_pod_without_clock_skew_evidence():
     observer, core, _ = _observer([_pod()])
     observer.treatment_effect_timeout_seconds = 0
     resource = {
-        "name": "analytics-clock-observer-abc123",
+        "name": f"{WORKLOAD_NAME}-abc123",
         "namespace": "hotel-reservation",
         "node": "kind-worker2",
         "selector_value": "abc123",
@@ -181,8 +191,8 @@ def test_observer_rejects_an_unready_pod_without_clock_skew_evidence():
             phase="Running",
             conditions=[SimpleNamespace(type="Ready", status="False")],
             container_statuses=[
-                SimpleNamespace(name="observer", ready=False, state=SimpleNamespace(running=SimpleNamespace())),
-                SimpleNamespace(name="reference", ready=True, state=SimpleNamespace(running=SimpleNamespace())),
+                SimpleNamespace(name=OBSERVER_CONTAINER, ready=False, state=SimpleNamespace(running=SimpleNamespace())),
+                SimpleNamespace(name=REFERENCE_CONTAINER, ready=True, state=SimpleNamespace(running=SimpleNamespace())),
             ],
         )
     )
@@ -204,7 +214,7 @@ def test_observer_rejects_a_fault_log_that_is_not_the_configured_positive_five_m
     observer, core, _ = _observer([_pod()])
     observer.treatment_effect_timeout_seconds = 0
     resource = {
-        "name": "analytics-clock-observer-abc123",
+        "name": f"{WORKLOAD_NAME}-abc123",
         "namespace": "hotel-reservation",
         "node": "kind-worker2",
         "selector_value": "abc123",
@@ -214,8 +224,8 @@ def test_observer_rejects_a_fault_log_that_is_not_the_configured_positive_five_m
             phase="Running",
             conditions=[SimpleNamespace(type="Ready", status="False")],
             container_statuses=[
-                SimpleNamespace(name="observer", ready=False, state=SimpleNamespace(running=SimpleNamespace())),
-                SimpleNamespace(name="reference", ready=True, state=SimpleNamespace(running=SimpleNamespace())),
+                SimpleNamespace(name=OBSERVER_CONTAINER, ready=False, state=SimpleNamespace(running=SimpleNamespace())),
+                SimpleNamespace(name=REFERENCE_CONTAINER, ready=True, state=SimpleNamespace(running=SimpleNamespace())),
             ],
         )
     )
@@ -228,7 +238,7 @@ def test_observer_rejects_a_fault_log_that_is_not_the_configured_positive_five_m
 def test_observer_retries_a_transient_kubernetes_read_failure_before_accepting_the_fault(monkeypatch):
     observer, core, _ = _observer([_pod()])
     resource = {
-        "name": "analytics-clock-observer-abc123",
+        "name": f"{WORKLOAD_NAME}-abc123",
         "namespace": "hotel-reservation",
         "node": "kind-worker2",
         "selector_value": "abc123",
@@ -238,8 +248,8 @@ def test_observer_retries_a_transient_kubernetes_read_failure_before_accepting_t
             phase="Running",
             conditions=[SimpleNamespace(type="Ready", status="False")],
             container_statuses=[
-                SimpleNamespace(name="observer", ready=False, state=SimpleNamespace(running=SimpleNamespace())),
-                SimpleNamespace(name="reference", ready=True, state=SimpleNamespace(running=SimpleNamespace())),
+                SimpleNamespace(name=OBSERVER_CONTAINER, ready=False, state=SimpleNamespace(running=SimpleNamespace())),
+                SimpleNamespace(name=REFERENCE_CONTAINER, ready=True, state=SimpleNamespace(running=SimpleNamespace())),
             ],
         )
     )
@@ -255,7 +265,7 @@ def test_observer_retries_a_transient_kubernetes_read_failure_before_accepting_t
 def test_observer_fails_immediately_when_the_treatment_pod_disappears():
     observer, core, _ = _observer([_pod()])
     resource = {
-        "name": "analytics-clock-observer-abc123",
+        "name": f"{WORKLOAD_NAME}-abc123",
         "namespace": "hotel-reservation",
         "node": "kind-worker2",
         "selector_value": "abc123",

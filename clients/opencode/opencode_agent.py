@@ -56,7 +56,23 @@ def write_opencode_config(model_name: str, config_path: Path, env: dict[str, str
     config = {
         "$schema": "https://opencode.ai/config.json",
         "permission": {
-            "external_directory": {"/opt/sregym/SREGym-applications/**": "allow"},
+            # Benchmark runs are non-interactive.  OpenCode's default "ask"
+            # behaviour otherwise turns an ordinary tool request into an
+            # implicit user rejection, which can end a run before it submits.
+            # The command-level denials below still win even when the CLI is
+            # launched with --auto.
+            "bash": {
+                "*": "allow",
+                "env*": "deny",
+                "printenv*": "deny",
+                "cat ~/.kube/config*": "deny",
+                "cat /root/.kube/config*": "deny",
+                "ls /tmp/sregym*": "deny",
+            },
+            "external_directory": {
+                "*": "deny",
+                "/opt/sregym/SREGym-applications/**": "allow",
+            },
             "edit": {"/opt/sregym/SREGym-applications/**": "deny"},
         },
     }
@@ -95,6 +111,7 @@ class OpenCodeAgent:
     """
 
     _OUTPUT_FILENAME = "opencode.txt"
+    _POLICY_REJECTION_MARKER = "user rejected permission to use this specific tool call"
 
     @staticmethod
     def check_installation() -> bool:
@@ -223,6 +240,20 @@ class OpenCodeAgent:
             logger.warning(f"Error extracting session ID: {e}")
 
         return None
+
+    def tool_policy_denial_count(self) -> int:
+        """Return explicit OpenCode policy denials recorded in this run's stream."""
+        if not self.output_path.exists():
+            return 0
+        try:
+            return (
+                self.output_path.read_text(encoding="utf-8", errors="replace")
+                .lower()
+                .count(self._POLICY_REJECTION_MARKER)
+            )
+        except OSError as error:
+            logger.warning("Could not inspect OpenCode policy events: %s", error)
+            return 0
 
     def export_session(self) -> Path | None:
         """
@@ -403,7 +434,7 @@ class OpenCodeAgent:
         variant_arg = f" --variant {shlex.quote(reasoning_effort)}" if reasoning_effort else ""
         session_arg = f" --session={shlex.quote(session_id)}" if session_id else ""
         return (
-            f"opencode --model={shlex.quote(self.model_name)} run --format=json --thinking"
+            f"opencode --model={shlex.quote(self.model_name)} run --format=json --thinking --auto"
             f"{variant_arg}{session_arg} {escaped_instruction}"
         )
 

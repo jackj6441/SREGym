@@ -1,18 +1,18 @@
 # Clock-skew noise profile
 
-The `clock-skew` profile creates one non-critical, SREGym-owned
-`analytics-clock-observer` Pod on the same worker as the problem's frontend
+The `clock-skew` profile creates one non-critical
+`analytics-time-indexer` Pod on the same worker as the problem's frontend
 Pod. It is a real but isolated fault: Chaos Mesh applies a `+5m`
-`CLOCK_REALTIME` offset to only the Pod's `observer` container.
+`CLOCK_REALTIME` offset to only the Pod's `indexer` container.
 
 The Pod has two containers that share a small local volume:
 
-- Both containers run the SREGym `clock-skew-observer` native binary from a
-  digest-pinned multiarch image. `reference` writes its unmodified epoch time;
-  `observer`, which starts before TimeChaos is applied, repeatedly calls
+- Both containers run the `analytics-time-indexer` native binary from a
+  digest-pinned multiarch image. `reference-clock` writes its unmodified epoch time;
+  `indexer`, which starts before TimeChaos is applied, repeatedly calls
   `clock_gettime(CLOCK_REALTIME)` in the same long-lived process.
 - After three consecutive samples are within five seconds of the configured
-  positive five-minute offset, `observer` records `CLOCK_SKEW_FAULT` in its
+  positive five-minute offset, `indexer` records `CLOCK_SKEW_FAULT` in its
   logs and fails its readiness probe.
 
 The observer intentionally does not fork `date` or another short-lived child
@@ -36,7 +36,21 @@ TimeChaos, then requires both the `NotReady` symptom and the clock-delta log
 marker before the agent can start. If the cluster does not actually apply the
 time offset, setup fails rather than running a case with fake or silent noise.
 It attempts cleanup; if Chaos Mesh resource deletion cannot be confirmed, that
-cleanup failure is surfaced rather than deleting the observer first.
+cleanup failure is surfaced rather than deleting the indexer first.
+
+## Blind evaluation contract
+
+The indexer remains visible to the agent as a normal, secondary analytics
+workload. Its labels, containers, and image name contain no `sregym` or
+`noise` identifier, so agent-visible metadata does not reveal that it is a
+benchmark treatment. The agent can still discover the genuine clock symptom by
+investigating the unhealthy workload and its logs; it is not instructed which
+observed fault is causal.
+
+Before an agent starts, the framework internally verifies the primary fault
+and (when enabled) the clock-skew treatment. These checks are recorded only in
+the result artifacts. A failed check is infrastructure-incomplete and never
+counts as a model sample.
 
 ## Run
 
@@ -67,20 +81,20 @@ the treatment expire before mitigation finishes.
 ## Verify and debug
 
 ```bash
-kubectl get pods -n hotel-reservation -l sregym.io/noise-profile=clock-skew -o wide
+kubectl get pods -n hotel-reservation -l app.kubernetes.io/name=analytics-time-indexer -o wide
 kubectl get timechaos -n chaos-mesh
 kubectl describe timechaos -n chaos-mesh <timechaos-name>
-kubectl get pod -n hotel-reservation <analytics-clock-observer-pod>
-kubectl logs -n hotel-reservation <analytics-clock-observer-pod> -c observer
+kubectl get pod -n hotel-reservation <analytics-time-indexer-pod>
+kubectl logs -n hotel-reservation <analytics-time-indexer-pod> -c indexer
 kubectl get pods -n chaos-mesh
 ```
 
-Expected evidence after setup is a Running observer Pod with `READY` equal to
+Expected evidence after setup is a Running indexer Pod with `READY` equal to
 `1/2`, plus a log line like `CLOCK_SKEW_FAULT offset_seconds=300`. The
-`reference` container stays Ready; only `observer` is selected by TimeChaos.
+`reference-clock` container stays Ready; only `indexer` is selected by TimeChaos.
 Do not treat this isolated noise workload as the root cause or modify it while
 mitigating the benchmark fault.
 
-The TimeChaos resource selects the observer by a unique `sregym.io/noise-run`
-label. Cleanup deletes the TimeChaos resource before deleting the observer
+The TimeChaos resource selects the indexer by a unique opaque instance
+label. Cleanup deletes the TimeChaos resource before deleting the indexer
 Pod; Chaos Mesh restores the target clock when its resource is deleted.

@@ -51,6 +51,41 @@ class WrongServiceSelector(Problem):
         )
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
+    def validate_fault_preflight(self):
+        """Fail closed unless the injected selector has produced zero endpoints.
+
+        This check runs after fault injection and before any agent session.  It
+        deliberately returns no diagnostic detail to the agent; its purpose is
+        to prevent a failed injection from being counted as an agent result.
+        """
+        core_v1 = self.kubectl.core_v1_api
+        service = core_v1.read_namespaced_service(name=self.faulty_service, namespace=self.namespace)
+        selector = dict(service.spec.selector or {})
+        injected_key = "current_service_name"
+        if selector.get(injected_key) != self.faulty_service:
+            raise RuntimeError(
+                f"wrong_service_selector preflight failed: {self.namespace}/{self.faulty_service} "
+                "does not contain the injected selector"
+            )
+
+        label_selector = ",".join(f"{key}={value}" for key, value in sorted(selector.items()))
+        matching_pods = core_v1.list_namespaced_pod(
+            namespace=self.namespace,
+            label_selector=label_selector,
+        ).items
+        if matching_pods:
+            raise RuntimeError(
+                f"wrong_service_selector preflight failed: {self.namespace}/{self.faulty_service} still selects Pod(s)"
+            )
+
+        endpoints = core_v1.read_namespaced_endpoints(name=self.faulty_service, namespace=self.namespace)
+        ready_addresses = [address for subset in (endpoints.subsets or []) for address in (subset.addresses or [])]
+        if ready_addresses:
+            raise RuntimeError(
+                f"wrong_service_selector preflight failed: {self.namespace}/{self.faulty_service} "
+                "still has ready endpoints"
+            )
+
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")

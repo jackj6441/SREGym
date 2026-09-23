@@ -19,11 +19,11 @@ STRESS_IMAGE = (
     "ghcr.io/sregym/stress:20260912-multiarch@sha256:60eba58b6c432c989d837e898286ff8df0d11065498b1f55090e6ed8d495dc94"
 )
 
-# This public fork release is used while the clock-skew benchmark is validated.
-# The multiarch index digest makes every CloudLab run reproducible.
+# The agent-visible image name is neutral. The multiarch index digest makes
+# every CloudLab run reproducible.
 CLOCK_SKEW_OBSERVER_IMAGE = (
-    "ghcr.io/jackj6441/sregym-clock-skew-observer:20260922.2"
-    "@sha256:e68fbd9ce60ae76ea8b6d45728a1beda0efa8f8a648fd33c5713c74fafef9f4a"
+    "ghcr.io/jackj6441/analytics-time-indexer:20260923.1"
+    "@sha256:6224d03cb1530c8a810c54f7d3d4b5ae448b52687841bb08570a6987d698ffb9"
 )
 
 WORKLOAD_IMBALANCE_PROXY_IMAGE = (

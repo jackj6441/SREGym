@@ -152,7 +152,7 @@ target "hotel-reservation" {
 target "clock-skew-observer" {
   inherits = ["_common"]
   context = "docker/clock-skew-observer"
-  tags = ["${REGISTRY}/sregym-clock-skew-observer:${IMAGE_TAG}"]
+  tags = ["${REGISTRY}/analytics-time-indexer:${IMAGE_TAG}"]
 }
 
 target "locust-exporter" {

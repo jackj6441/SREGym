@@ -62,7 +62,11 @@ def test_config_allows_read_only_access_to_mounted_app_manifests(tmp_path):
     )
 
     assert config["permission"]["external_directory"]["/opt/sregym/SREGym-applications/**"] == "allow"
+    assert config["permission"]["external_directory"]["*"] == "deny"
     assert config["permission"]["edit"]["/opt/sregym/SREGym-applications/**"] == "deny"
+    assert config["permission"]["bash"]["*"] == "allow"
+    assert config["permission"]["bash"]["env*"] == "deny"
+    assert config["permission"]["bash"]["cat /root/.kube/config*"] == "deny"
 
 
 def test_native_opencode_model_also_uses_the_safe_permission_config(tmp_path, monkeypatch):
@@ -86,3 +90,14 @@ def test_continuation_command_targets_the_existing_session(tmp_path):
     command = agent._build_command("finish the current stage", session_id="ses-123")
 
     assert "--session=ses-123" in command
+    assert "--auto" in command
+
+
+def test_records_explicit_tool_policy_denials(tmp_path):
+    agent = OpenCodeAgent(tmp_path, "opencode/muse-spark-1.3-contributor-free")
+    agent.output_path.write_text(
+        "ok\nThe user rejected permission to use this specific tool call.\n",
+        encoding="utf-8",
+    )
+
+    assert agent.tool_policy_denial_count() == 1

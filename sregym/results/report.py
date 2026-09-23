@@ -71,6 +71,9 @@ def build_report(
             reason = row.get("incomplete_reason") or "missing stage results"
             stage = row.get("incomplete_stage")
             detail = reason.replace("_", " ")
+            incomplete_class = row.get("incomplete_class")
+            if incomplete_class:
+                detail = f"{incomplete_class}: {detail}"
             if stage:
                 detail = f"{detail} at {stage}"
         elif _as_bool(row.get("timed_out")):

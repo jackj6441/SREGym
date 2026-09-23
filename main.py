@@ -3,6 +3,7 @@ import asyncio
 import contextlib
 import csv
 import importlib
+import json
 import logging
 import os
 import sys
@@ -55,6 +56,24 @@ _driver_base_dir: Path | None = None
 _driver_error: BaseException | None = None
 EVALUATION_DRAIN_TIMEOUT_SECONDS = 300
 CLEANUP_DRAIN_TIMEOUT_SECONDS = 300
+
+
+def _agent_infrastructure_event(run: RunArtifacts) -> str | None:
+    """Read generic agent-side infrastructure evidence after a process exits.
+
+    Agents write their small result summaries into the opaque per-attempt
+    directory. This helper intentionally knows no problem or fault details;
+    it only prevents a sandbox-policy failure from being misreported as a
+    model failure.
+    """
+    for path in run.active_dir.glob("*_results_*.json"):
+        try:
+            result = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if int(result.get("tool_policy_denials", 0) or 0) > 0:
+            return "tool_policy_rejected"
+    return None
 
 
 class BenchmarkCampaignAborted(RuntimeError):
@@ -600,16 +619,22 @@ def driver_loop(
                                     evaluation_failed = True
                                     console.log(f"⚠️  Conductor evaluation raised: {e}")
                             missing_stages = conductor.missing_submission_stages()
+                            infrastructure_event = _agent_infrastructure_event(run)
+                            if infrastructure_event is not None:
+                                conductor.results["agent_infrastructure_event"] = infrastructure_event
                             if abort_campaign_after_attempt or evaluation_failed or missing_stages:
                                 if abort_campaign_after_attempt:
                                     reason = "evaluation_timeout_after_agent_exit"
                                 elif evaluation_failed:
                                     reason = "evaluation_failed_after_agent_exit"
+                                elif infrastructure_event is not None:
+                                    reason = f"agent_{infrastructure_event}"
                                 else:
                                     reason = "agent_exited_before_all_stages_completed"
                                 conductor.record_incomplete_attempt(
                                     reason,
                                     agent_return_code=tracked_proc.proc.returncode,
+                                    incomplete_class="infrastructure" if infrastructure_event is not None else "model",
                                 )
                             if not abort_campaign_after_attempt:
                                 console.log("🧹 Running conductor cleanup after agent exit...")

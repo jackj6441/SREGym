@@ -20,13 +20,17 @@ NOISE_PROFILES = (CLOCK_SKEW_PROFILE,)
 DEFAULT_DURATION_SECONDS = 3600
 TIME_OFFSET = "+5m"
 TIME_OFFSET_SECONDS = 300
-WORKLOAD_NAME = "analytics-clock-observer"
-RUN_LABEL = "sregym.io/noise-run"
-OBSERVER_CONTAINER = "observer"
-REFERENCE_CONTAINER = "reference"
+WORKLOAD_NAME = "analytics-time-indexer"
+# This label is only an opaque per-run selector for Chaos Mesh.  Do not use a
+# SREGym- or noise-named label here: agents can inspect Pod labels and that
+# would disclose which visible fault was injected by the benchmark.
+RUN_LABEL = "app.kubernetes.io/instance"
+OBSERVER_CONTAINER = "indexer"
+REFERENCE_CONTAINER = "reference-clock"
 CLOCK_REFERENCE_VOLUME = "clock-reference"
 CLOCK_REFERENCE_PATH = "/clock-reference"
 CLOCK_SKEW_MARKER = f"{CLOCK_REFERENCE_PATH}/clock-skew-active"
+INDEXER_BINARY = "/usr/local/bin/analytics-time-indexer"
 CLOCK_SKEW_FAULT_LOG = "CLOCK_SKEW_FAULT"
 CLOCK_SKEW_THRESHOLD_SECONDS = 295
 CLOCK_SKEW_OFFSET_TOLERANCE_SECONDS = 5
@@ -138,8 +142,7 @@ class ClockSkewObserver:
                 "name": name,
                 "labels": {
                     "app.kubernetes.io/name": WORKLOAD_NAME,
-                    "app.kubernetes.io/component": "noise-observer",
-                    "sregym.io/noise-profile": CLOCK_SKEW_PROFILE,
+                    "app.kubernetes.io/component": "worker",
                     RUN_LABEL: selector_value,
                 },
             },
@@ -154,7 +157,7 @@ class ClockSkewObserver:
                         "name": REFERENCE_CONTAINER,
                         "image": CLOCK_SKEW_OBSERVER_IMAGE,
                         "imagePullPolicy": "IfNotPresent",
-                        "command": ["/usr/local/bin/clock-skew-observer", "reference"],
+                        "command": [INDEXER_BINARY, "reference"],
                         "args": [f"{CLOCK_REFERENCE_PATH}/epoch"],
                         "volumeMounts": [volume_mount],
                         "resources": {
@@ -166,7 +169,7 @@ class ClockSkewObserver:
                         "name": OBSERVER_CONTAINER,
                         "image": CLOCK_SKEW_OBSERVER_IMAGE,
                         "imagePullPolicy": "IfNotPresent",
-                        "command": ["/usr/local/bin/clock-skew-observer", "observe"],
+                        "command": [INDEXER_BINARY, "observe"],
                         "args": [
                             f"{CLOCK_REFERENCE_PATH}/epoch",
                             CLOCK_SKEW_MARKER,
@@ -176,7 +179,7 @@ class ClockSkewObserver:
                         "readinessProbe": {
                             "exec": {
                                 "command": [
-                                    "/usr/local/bin/clock-skew-observer",
+                                    INDEXER_BINARY,
                                     "healthcheck",
                                     CLOCK_SKEW_MARKER,
                                 ]
