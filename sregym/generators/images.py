@@ -23,6 +23,7 @@ STRESS_IMAGE = (
 # The multiarch index digest makes every CloudLab run reproducible.
 CLOCK_SKEW_OBSERVER_IMAGE = (
     "ghcr.io/jackj6441/sregym-clock-skew-observer:20260922.2"
+    "@sha256:e68fbd9ce60ae76ea8b6d45728a1beda0efa8f8a648fd33c5713c74fafef9f4a"
 )
 
 WORKLOAD_IMBALANCE_PROXY_IMAGE = (
