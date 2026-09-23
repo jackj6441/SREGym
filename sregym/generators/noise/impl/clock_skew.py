@@ -2,6 +2,7 @@
 
 import contextlib
 import logging
+import re
 import time
 import uuid
 
@@ -18,6 +19,7 @@ NOISE_PROFILES = (CLOCK_SKEW_PROFILE,)
 # expiring and recreating the deterministic treatment mid-attempt.
 DEFAULT_DURATION_SECONDS = 3600
 TIME_OFFSET = "+5m"
+TIME_OFFSET_SECONDS = 300
 WORKLOAD_NAME = "analytics-clock-observer"
 RUN_LABEL = "sregym.io/noise-run"
 OBSERVER_CONTAINER = "observer"
@@ -26,7 +28,9 @@ CLOCK_REFERENCE_VOLUME = "clock-reference"
 CLOCK_REFERENCE_PATH = "/clock-reference"
 CLOCK_SKEW_MARKER = f"{CLOCK_REFERENCE_PATH}/clock-skew-active"
 CLOCK_SKEW_FAULT_LOG = "CLOCK_SKEW_FAULT"
-CLOCK_SKEW_THRESHOLD_SECONDS = 240
+CLOCK_SKEW_THRESHOLD_SECONDS = 295
+CLOCK_SKEW_OFFSET_TOLERANCE_SECONDS = 5
+CLOCK_SKEW_FAULT_PATTERN = re.compile(rf"\b{CLOCK_SKEW_FAULT_LOG} offset_seconds=([+-]?\d+)\b")
 
 
 class ClockSkewObserver:
@@ -87,6 +91,15 @@ class ClockSkewObserver:
             and reference.state.running is not None
             and reference.ready is True
         )
+
+    @staticmethod
+    def _has_expected_clock_skew_log(logs: str | None) -> bool:
+        """Accept only the configured positive five-minute TimeChaos offset."""
+        for match in CLOCK_SKEW_FAULT_PATTERN.finditer(logs or ""):
+            offset_seconds = int(match.group(1))
+            if abs(offset_seconds - TIME_OFFSET_SECONDS) <= CLOCK_SKEW_OFFSET_TOLERANCE_SECONDS:
+                return True
+        return False
 
     def _target_node(self, namespace: str, target_deployment: str) -> str:
         deployment = self.apps_v1.read_namespaced_deployment(name=target_deployment, namespace=namespace)
@@ -225,7 +238,7 @@ class ClockSkewObserver:
                         container=OBSERVER_CONTAINER,
                         tail_lines=20,
                     )
-                    if CLOCK_SKEW_FAULT_LOG in (logs or ""):
+                    if self._has_expected_clock_skew_log(logs):
                         return
             except ApiException as exc:
                 if exc.status == 404:

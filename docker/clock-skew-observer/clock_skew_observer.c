@@ -74,6 +74,9 @@ static int read_epoch(const char *path, long long *epoch) {
     ssize_t count = read(descriptor, contents, sizeof(contents) - 1);
     int close_result = close(descriptor);
     if (count < 1 || close_result != 0) {
+        if (errno == 0) {
+            errno = EIO;
+        }
         return -1;
     }
     contents[count] = '\0';
@@ -81,6 +84,9 @@ static int read_epoch(const char *path, long long *epoch) {
     errno = 0;
     long long value = strtoll(contents, &end, 10);
     if (errno != 0 || end == contents) {
+        if (errno == 0) {
+            errno = EINVAL;
+        }
         return -1;
     }
     *epoch = value;
@@ -120,24 +126,36 @@ static int run_reference(const char *epoch_path) {
 static int run_observer(const char *epoch_path, const char *marker_path, long long threshold_seconds) {
     int consecutive = 0;
     bool reported = false;
+    bool reference_read_error_reported = false;
     while (running) {
         long long reference = 0;
         long long observed = 0;
         int reference_result = read_epoch(epoch_path, &reference);
-        if (reference_result == 0 && current_epoch(&observed) == 0) {
-            long long delta = observed - reference;
-            long long absolute = delta < 0 ? -delta : delta;
-            if (absolute >= threshold_seconds) {
-                consecutive++;
-                if (consecutive >= 3 && create_marker(marker_path) == 0 && !reported) {
-                    printf("CLOCK_SKEW_FAULT offset_seconds=%lld\n", delta);
-                    fflush(stdout);
-                    reported = true;
+        if (reference_result < 0 && !reference_read_error_reported) {
+            fprintf(stderr, "CLOCK_SKEW_REFERENCE_READ_ERROR path=%s error=%s\n", epoch_path, strerror(errno));
+            fflush(stderr);
+            reference_read_error_reported = true;
+        }
+        if (reference_result == 0) {
+            if (reference_read_error_reported) {
+                printf("CLOCK_SKEW_REFERENCE_READ_RECOVERED path=%s\n", epoch_path);
+                fflush(stdout);
+                reference_read_error_reported = false;
+            }
+            if (current_epoch(&observed) == 0) {
+                long long delta = observed - reference;
+                if (delta >= threshold_seconds) {
+                    consecutive++;
+                    if (consecutive >= 3 && create_marker(marker_path) == 0 && !reported) {
+                        printf("CLOCK_SKEW_FAULT offset_seconds=%lld\n", delta);
+                        fflush(stdout);
+                        reported = true;
+                    }
+                } else {
+                    consecutive = 0;
+                    reported = false;
+                    clear_marker(marker_path);
                 }
-            } else {
-                consecutive = 0;
-                reported = false;
-                clear_marker(marker_path);
             }
         }
         sleep_millis(250);

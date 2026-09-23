@@ -51,6 +51,36 @@ case "$TARGET" in
         run_image --network none --entrypoint stress "$IMAGE" --version | grep -Fx 'stress 1.0.4'
         run_image --network none --cpus 1 --memory 64m --entrypoint stress "$IMAGE" --cpu 1 --timeout 1
         ;;
+    clock-skew-observer)
+        smoke_dir="$(mktemp -d)"
+        reference_container="clock-skew-reference-${RANDOM}-$$"
+        observer_container="clock-skew-observer-${RANDOM}-$$"
+        cleanup_clock_skew_smoke() {
+            docker stop "$observer_container" >/dev/null 2>&1 || true
+            docker stop "$reference_container" >/dev/null 2>&1 || true
+            unlink "$smoke_dir/clock-skew-active" >/dev/null 2>&1 || true
+            unlink "$smoke_dir/epoch" >/dev/null 2>&1 || true
+            rmdir "$smoke_dir" >/dev/null 2>&1 || true
+        }
+        trap cleanup_clock_skew_smoke EXIT
+        docker run --rm --detach --name "$reference_container" --network none --platform "linux/$ARCH" \
+            --volume "$smoke_dir:/clock-reference" "$IMAGE" reference /clock-reference/epoch >/dev/null
+        sleep 1
+        test -s "$smoke_dir/epoch"
+        docker stop "$reference_container" >/dev/null
+        printf '0\n' > "$smoke_dir/epoch"
+        docker run --rm --detach --name "$observer_container" --network none --platform "linux/$ARCH" \
+            --volume "$smoke_dir:/clock-reference" "$IMAGE" observe /clock-reference/epoch \
+            /clock-reference/clock-skew-active 1 >/dev/null
+        sleep 1
+        docker logs "$observer_container" | grep -Eq '^CLOCK_SKEW_FAULT offset_seconds=[1-9][0-9]*$'
+        test -f "$smoke_dir/clock-skew-active"
+        if run_image --network none --volume "$smoke_dir:/clock-reference" \
+            "$IMAGE" healthcheck /clock-reference/clock-skew-active; then
+            echo "Clock-skew healthcheck reported healthy after a fault" >&2
+            exit 1
+        fi
+        ;;
     flight-ticket-python-runtime)
         run_image -i --entrypoint python "$IMAGE" < "$SCRIPT_DIR/flight-ticket/test_python_runtime.py"
         ;;

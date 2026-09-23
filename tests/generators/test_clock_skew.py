@@ -192,6 +192,39 @@ def test_observer_rejects_an_unready_pod_without_clock_skew_evidence():
         observer.wait_for_treatment_effect(resource)
 
 
+@pytest.mark.parametrize(
+    "logs",
+    [
+        "CLOCK_SKEW_FAULT offset_seconds=-300\n",
+        "CLOCK_SKEW_FAULT offset_seconds=241\n",
+        "CLOCK_SKEW_FAULT offset_seconds=600\n",
+    ],
+)
+def test_observer_rejects_a_fault_log_that_is_not_the_configured_positive_five_minute_offset(logs):
+    observer, core, _ = _observer([_pod()])
+    observer.treatment_effect_timeout_seconds = 0
+    resource = {
+        "name": "analytics-clock-observer-abc123",
+        "namespace": "hotel-reservation",
+        "node": "kind-worker2",
+        "selector_value": "abc123",
+    }
+    core.read_namespaced_pod.return_value = SimpleNamespace(
+        status=SimpleNamespace(
+            phase="Running",
+            conditions=[SimpleNamespace(type="Ready", status="False")],
+            container_statuses=[
+                SimpleNamespace(name="observer", ready=False, state=SimpleNamespace(running=SimpleNamespace())),
+                SimpleNamespace(name="reference", ready=True, state=SimpleNamespace(running=SimpleNamespace())),
+            ],
+        )
+    )
+    core.read_namespaced_pod_log.return_value = logs
+
+    with pytest.raises(TimeoutError, match="did not become observable"):
+        observer.wait_for_treatment_effect(resource)
+
+
 def test_observer_retries_a_transient_kubernetes_read_failure_before_accepting_the_fault(monkeypatch):
     observer, core, _ = _observer([_pod()])
     resource = {

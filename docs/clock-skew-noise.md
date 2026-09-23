@@ -11,8 +11,9 @@ The Pod has two containers that share a small local volume:
   digest-pinned multiarch image. `reference` writes its unmodified epoch time;
   `observer`, which starts before TimeChaos is applied, repeatedly calls
   `clock_gettime(CLOCK_REALTIME)` in the same long-lived process.
-- After three consecutive samples exceed four minutes of drift, `observer`
-  records `CLOCK_SKEW_FAULT` in its logs and fails its readiness probe.
+- After three consecutive samples are within five seconds of the configured
+  positive five-minute offset, `observer` records `CLOCK_SKEW_FAULT` in its
+  logs and fails its readiness probe.
 
 The observer intentionally does not fork `date` or another short-lived child
 process to measure time: on some Chaos Mesh/container-runtime combinations,
