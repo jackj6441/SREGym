@@ -30,6 +30,15 @@ def test_vulnerable_policy_is_part_of_the_initial_deployment():
     assert overrides["search"]["hotel-reserv-search"]["RATE_RPC_MAX_ATTEMPTS"] == "3"
 
 
+def test_clock_contract_uses_same_application_image_for_frontend_and_recommendation():
+    overrides = SearchRateRetryCollapse._clock_contract_image_overrides("local/hotel:release-v1")
+
+    assert overrides == {
+        "frontend": {"hotel-reserv-frontend": "local/hotel:release-v1"},
+        "recommendation": {"hotel-reserv-recommendation": "local/hotel:release-v1"},
+    }
+
+
 def test_rollout_wait_ignores_unrelated_agent_pods():
     problem = SearchRateRetryCollapse.__new__(SearchRateRetryCollapse)
     problem.namespace = "hotel-reservation"

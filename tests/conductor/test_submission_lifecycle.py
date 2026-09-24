@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import contextlib
 import logging
 import sys
 import threading
@@ -923,6 +924,31 @@ def test_no_stage_path_starts_bounded_background_cleanup():
     conductor.abandon_submission_work()
     release_recovery.set()
     future.result(timeout=2)
+
+
+def test_clock_skew_starts_after_primary_fault_preflight_and_before_diagnosis(monkeypatch):
+    conductor = _conductor()
+    conductor.config = SimpleNamespace(enable_noise=True, noise_profile="clock-skew")
+    conductor.fault_injected = False
+    events = []
+    noise = SimpleNamespace(
+        start=lambda: events.append("noise-start"),
+        set_stage=lambda stage: events.append(f"stage-{stage}"),
+    )
+    monkeypatch.setattr(conductor_module, "get_noise_manager", lambda: noise)
+    conductor._phase = lambda _name: contextlib.nullcontext()
+
+    def inject():
+        events.append("fault-injected")
+        conductor.fault_injected = True
+
+    conductor._inject_fault = inject
+
+    Conductor._advance_to_next_stage(conductor)
+
+    assert events == ["fault-injected", "noise-start", "stage-diagnosis"]
+    assert conductor.results["noise_preflight"] == "passed"
+    assert conductor.submission_stage == "diagnosis"
 
 
 def test_new_generation_uses_setup_state_before_early_setup_failure(monkeypatch):

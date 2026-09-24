@@ -72,3 +72,45 @@ def test_deployment_env_overrides_reject_unknown_targets(tmp_path):
         assert "deployment/missing:container" in str(exc)
     else:
         raise AssertionError("missing override target was accepted")
+
+
+def test_deployment_image_overrides_are_scoped_to_named_containers(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    manifest = source / "services.yaml"
+    manifest.write_text(
+        """\
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  template:
+    spec:
+      containers:
+        - name: hotel-reserv-frontend
+          image: original:one
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rate
+spec:
+  template:
+    spec:
+      containers:
+        - name: hotel-reserv-rate
+          image: original:two
+"""
+    )
+    app = HotelReservation.__new__(HotelReservation)
+    app.k8s_deploy_path = source
+    app.deployment_env_overrides = {}
+    app.deployment_image_overrides = {"frontend": {"hotel-reserv-frontend": "local/hotel:release-v1"}}
+
+    with app._rendered_deployment_configs() as rendered_path:
+        deployments = list(yaml.safe_load_all((Path(rendered_path) / "services.yaml").read_text()))
+
+    assert deployments[0]["spec"]["template"]["spec"]["containers"][0]["image"] == "local/hotel:release-v1"
+    assert deployments[1]["spec"]["template"]["spec"]["containers"][0]["image"] == "original:two"
+    assert manifest.read_text().count("original:") == 2

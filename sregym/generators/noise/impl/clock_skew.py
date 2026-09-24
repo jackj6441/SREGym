@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 CLOCK_SKEW_PROFILE = "clock-skew"
 NOISE_PROFILES = (CLOCK_SKEW_PROFILE,)
-# Cover both default 1200-second agent stages plus oracle evaluation without
-# expiring and recreating the deterministic treatment mid-attempt.
-DEFAULT_DURATION_SECONDS = 3600
+# Cover two long agent stages plus oracle evaluation without silently losing
+# the deterministic treatment before final cleanup.
+DEFAULT_DURATION_SECONDS = 7200
 TIME_OFFSET = "+5m"
 TIME_OFFSET_SECONDS = 300
 WORKLOAD_NAME = "analytics-time-indexer"

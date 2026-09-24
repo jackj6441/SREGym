@@ -14,44 +14,50 @@ def noise_manager():
         manager.NoiseManager._instance = None
 
 
-def test_clock_profile_creates_the_observer_and_time_chaos_before_the_agent_starts(noise_manager, monkeypatch):
-    noise, kubectl = noise_manager
-    resource = {
-        "name": "analytics-clock-observer-run",
-        "namespace": "hotel-reservation",
-        "node": "kind-worker2",
-        "selector_value": "run",
-    }
-    observer = Mock()
-    observer.inject.return_value = resource
-    observer_type = Mock(return_value=observer)
-    observer_type.time_chaos_spec.return_value = {
+def _mock_treatment(monkeypatch):
+    target = {"name": "recommendation-abc", "uid": "pod-uid", "namespace": "hotel-reservation"}
+    treatment = Mock()
+    treatment.select_target.return_value = target
+    treatment.capture_baseline.return_value = "healthy-primary-baseline"
+    treatment.time_chaos_spec.return_value = {
         "mode": "one",
-        "selector": {"namespaces": ["hotel-reservation"], "labelSelectors": {"sregym.io/noise-run": "run"}},
-        "containerNames": ["observer"],
+        "selector": {"pods": {"hotel-reservation": [target["name"]]}},
+        "containerNames": ["hotel-reserv-recommendation"],
         "timeOffset": "+5m",
-        "duration": "120s",
+        "duration": "3600s",
     }
-    monkeypatch.setattr(manager, "ClockSkewObserver", observer_type)
+    treatment_type = Mock(return_value=treatment)
+    monkeypatch.setattr(manager, "ClockSkewRecommendation", treatment_type)
+    return treatment, treatment_type, target
+
+
+def test_clock_profile_uses_existing_recommendation_pod_and_one_time_chaos_before_agent(noise_manager, monkeypatch):
+    noise, kubectl = noise_manager
+    treatment, treatment_type, target = _mock_treatment(monkeypatch)
     ensure_chaos = Mock(side_effect=lambda: setattr(noise, "_chaos_mesh_ready", True))
     monkeypatch.setattr(noise, "_ensure_chaos_mesh_installed", ensure_chaos)
     noise.set_problem_context(
         {
             "namespace": "hotel-reservation",
-            "target_deployment": "frontend",
+            "protected_workload": "search-workload",
             "noise_profile": CLOCK_SKEW_PROFILE,
-            "noise_duration_seconds": 120,
+            "noise_duration_seconds": 3600,
         }
     )
 
     noise.start()
 
     ensure_chaos.assert_called_once_with()
-    observer.inject.assert_called_once_with(namespace="hotel-reservation", target_deployment="frontend")
-    observer.wait_for_treatment_effect.assert_called_once_with(resource)
+    treatment_type.assert_called_once_with(kubectl, "search-workload")
+    treatment.select_target.assert_called_once_with("hotel-reservation")
+    treatment.capture_baseline.assert_called_once_with(target)
+    treatment.wait_for_treatment_effect.assert_called_once_with(target, "healthy-primary-baseline")
     assert noise.running is True
-    assert noise.active_workloads == [resource]
+    assert noise.active_workloads == []
     assert noise.active_experiments[0]["kind"] == "TimeChaos"
+    assert noise.active_experiments[0]["name"].startswith("hotel-recommendation-")
+    assert "noise" not in noise.active_experiments[0]["name"]
+    assert "clock-skew" not in noise.active_experiments[0]["name"]
     assert noise._background_thread is None
     kubectl.exec_command_checked.assert_called_once()
     applied = kubectl.exec_command_checked.call_args.args[0]
@@ -60,25 +66,14 @@ def test_clock_profile_creates_the_observer_and_time_chaos_before_the_agent_star
 
 def test_clock_profile_fails_closed_when_time_chaos_does_not_create_the_expected_fault(noise_manager, monkeypatch):
     noise, kubectl = noise_manager
-    resource = {
-        "name": "analytics-clock-observer-run",
-        "namespace": "hotel-reservation",
-        "node": "kind-worker2",
-        "selector_value": "run",
-    }
-    observer = Mock()
-    observer.inject.return_value = resource
-    observer.wait_for_treatment_effect.side_effect = TimeoutError("clock skew fault did not become observable")
-    observer_type = Mock(return_value=observer)
-    observer_type.time_chaos_spec.return_value = {"mode": "one"}
-    monkeypatch.setattr(manager, "ClockSkewObserver", observer_type)
+    treatment, _, target = _mock_treatment(monkeypatch)
+    treatment.wait_for_treatment_effect.side_effect = TimeoutError("clock skew fault did not become observable")
     monkeypatch.setattr(noise, "_ensure_chaos_mesh_installed", lambda: setattr(noise, "_chaos_mesh_ready", True))
     monkeypatch.setattr(noise, "_force_remove_all_chaos_resources", Mock())
     kubectl.exec_command_checked.return_value = ""
     noise.set_problem_context(
         {
             "namespace": "hotel-reservation",
-            "target_deployment": "frontend",
             "noise_profile": CLOCK_SKEW_PROFILE,
             "noise_duration_seconds": 3600,
         }
@@ -88,8 +83,8 @@ def test_clock_profile_fails_closed_when_time_chaos_does_not_create_the_expected
         noise.start()
 
     assert noise.running is False
-    observer.wait_for_treatment_effect.assert_called_once_with(resource)
-    observer.delete.assert_called_once_with(resource)
+    treatment.wait_for_treatment_effect.assert_called_once_with(target, "healthy-primary-baseline")
+    assert noise.active_workloads == []
     commands = [call.args[0] for call in kubectl.exec_command_checked.call_args_list]
     assert commands[0].startswith("kubectl apply -f ")
     assert any("kubectl delete TimeChaos" in command for command in commands)
@@ -97,24 +92,13 @@ def test_clock_profile_fails_closed_when_time_chaos_does_not_create_the_expected
 
 def test_clock_profile_fails_fast_when_time_chaos_apply_is_rejected(noise_manager, monkeypatch):
     noise, kubectl = noise_manager
-    resource = {
-        "name": "analytics-clock-observer-run",
-        "namespace": "hotel-reservation",
-        "node": "kind-worker2",
-        "selector_value": "run",
-    }
-    observer = Mock()
-    observer.inject.return_value = resource
-    observer_type = Mock(return_value=observer)
-    observer_type.time_chaos_spec.return_value = {"mode": "one"}
-    monkeypatch.setattr(manager, "ClockSkewObserver", observer_type)
+    treatment, _, _ = _mock_treatment(monkeypatch)
     monkeypatch.setattr(noise, "_ensure_chaos_mesh_installed", lambda: setattr(noise, "_chaos_mesh_ready", True))
     monkeypatch.setattr(noise, "_force_remove_all_chaos_resources", Mock())
     kubectl.exec_command_checked.side_effect = RuntimeError("TimeChaos admission rejected")
     noise.set_problem_context(
         {
             "namespace": "hotel-reservation",
-            "target_deployment": "frontend",
             "noise_profile": CLOCK_SKEW_PROFILE,
             "noise_duration_seconds": 3600,
         }
@@ -125,41 +109,60 @@ def test_clock_profile_fails_fast_when_time_chaos_apply_is_rejected(noise_manage
 
     assert noise.running is False
     assert noise.active_experiments == []
-    observer.wait_for_treatment_effect.assert_not_called()
-    observer.delete.assert_called_once_with(resource)
+    treatment.wait_for_treatment_effect.assert_not_called()
+    assert noise.active_workloads == []
+
+
+def test_clock_profile_reports_failed_recovery_after_preflight_abort(noise_manager, monkeypatch):
+    noise, kubectl = noise_manager
+    treatment, _, target = _mock_treatment(monkeypatch)
+    treatment.wait_for_treatment_effect.side_effect = TimeoutError("effect missing")
+    treatment.wait_for_recovery.side_effect = TimeoutError("still skewed")
+    monkeypatch.setattr(noise, "_ensure_chaos_mesh_installed", lambda: setattr(noise, "_chaos_mesh_ready", True))
+    monkeypatch.setattr(noise, "_force_remove_all_chaos_resources", Mock())
+    kubectl.exec_command_checked.return_value = ""
+    noise.set_problem_context({"namespace": "hotel-reservation", "noise_profile": CLOCK_SKEW_PROFILE})
+
+    with pytest.raises(RuntimeError, match="recovery could not be confirmed"):
+        noise.start()
+
+    assert noise.running is False
+    assert noise._deterministic_target == target
+    treatment.wait_for_recovery.assert_called_once_with(target)
+
+
+def test_clock_profile_reports_unconfirmed_time_chaos_deletion_after_preflight_abort(noise_manager, monkeypatch):
+    noise, kubectl = noise_manager
+    treatment, _, _ = _mock_treatment(monkeypatch)
+    treatment.wait_for_treatment_effect.side_effect = TimeoutError("effect missing")
+    monkeypatch.setattr(noise, "_ensure_chaos_mesh_installed", lambda: setattr(noise, "_chaos_mesh_ready", True))
+    monkeypatch.setattr(noise, "_cleanup_experiments", Mock(return_value=False))
+    force_remove = Mock()
+    monkeypatch.setattr(noise, "_force_remove_all_chaos_resources", force_remove)
+    noise.set_problem_context({"namespace": "hotel-reservation", "noise_profile": CLOCK_SKEW_PROFILE})
+
+    with pytest.raises(RuntimeError, match="deletion could not be confirmed"):
+        noise.start()
+
+    assert noise.running is False
+    force_remove.assert_called_once_with()
+    treatment.wait_for_recovery.assert_not_called()
+    kubectl.exec_command_checked.assert_called_once()
 
 
 def test_clock_profile_does_not_reinject_after_the_random_noise_cooldown(noise_manager, monkeypatch):
     noise, kubectl = noise_manager
-    resource = {
-        "name": "analytics-clock-observer-run",
-        "namespace": "hotel-reservation",
-        "node": "kind-worker2",
-        "selector_value": "run",
-    }
-    observer = Mock()
-    observer.inject.return_value = resource
-    observer_type = Mock(return_value=observer)
-    observer_type.time_chaos_spec.return_value = {
-        "mode": "one",
-        "selector": {"namespaces": ["hotel-reservation"], "labelSelectors": {"sregym.io/noise-run": "run"}},
-        "containerNames": ["observer"],
-        "timeOffset": "+5m",
-        "duration": "3600s",
-    }
-    monkeypatch.setattr(manager, "ClockSkewObserver", observer_type)
+    treatment, _, _ = _mock_treatment(monkeypatch)
     monkeypatch.setattr(noise, "_ensure_chaos_mesh_installed", lambda: setattr(noise, "_chaos_mesh_ready", True))
     noise.set_problem_context(
         {
             "namespace": "hotel-reservation",
-            "target_deployment": "frontend",
             "noise_profile": CLOCK_SKEW_PROFILE,
             "noise_duration_seconds": 3600,
         }
     )
 
     noise.start()
-    workload_identity = noise.active_workloads[0]
     experiment_identity = noise.active_experiments[0]
     cleanup_experiments = Mock()
     cleanup_workloads = Mock()
@@ -169,9 +172,8 @@ def test_clock_profile_does_not_reinject_after_the_random_noise_cooldown(noise_m
 
     noise._maybe_inject()
 
-    observer.inject.assert_called_once_with(namespace="hotel-reservation", target_deployment="frontend")
-    assert noise.active_workloads == [workload_identity]
-    assert noise.active_workloads[0] is workload_identity
+    treatment.select_target.assert_called_once_with("hotel-reservation")
+    assert noise.active_workloads == []
     assert noise.active_experiments == [experiment_identity]
     assert noise.active_experiments[0] is experiment_identity
     kubectl.exec_command_checked.assert_called_once()
@@ -201,6 +203,25 @@ def test_clock_profile_stop_removes_the_time_chaos_before_its_owned_observer(noi
     observer.delete.assert_called_once_with(resource)
     delete_command = kubectl.exec_command_checked.call_args_list[0].args[0]
     assert delete_command.startswith("kubectl delete TimeChaos noise-clock-skew-123")
+
+
+def test_clock_profile_confirms_recommendation_recovery_after_time_chaos_deletion(noise_manager, monkeypatch):
+    noise, _ = noise_manager
+    treatment, _, target = _mock_treatment(monkeypatch)
+    events = []
+    noise.noise_profile = CLOCK_SKEW_PROFILE
+    noise._deterministic_target = target
+    noise.running = True
+    monkeypatch.setattr(noise, "_cleanup_experiments", lambda: events.append("delete-timechaos") or True)
+    monkeypatch.setattr(noise, "_cleanup_workloads", Mock())
+    monkeypatch.setattr(noise, "_force_remove_all_chaos_resources", Mock())
+    treatment.wait_for_recovery.side_effect = lambda _target: events.append("verify-recovery")
+
+    noise.stop()
+
+    assert events == ["delete-timechaos", "verify-recovery"]
+    treatment.wait_for_recovery.assert_called_once_with(target)
+    assert noise._deterministic_target is None
 
 
 def test_clock_profile_removes_the_temporary_manifest_when_apply_fails(noise_manager, monkeypatch, tmp_path):

@@ -29,6 +29,7 @@ class HotelReservation(Application):
         self,
         mount_failure_scripts: bool = True,
         deployment_env_overrides: dict[str, dict[str, dict[str, str]]] | None = None,
+        deployment_image_overrides: dict[str, dict[str, str]] | None = None,
     ):
         super().__init__(HOTEL_RES_METADATA)
         self.kubectl = KubeCtl()
@@ -36,6 +37,7 @@ class HotelReservation(Application):
         self.helm_deploy = False
         self.mount_failure_scripts = mount_failure_scripts
         self.deployment_env_overrides = deployment_env_overrides or {}
+        self.deployment_image_overrides = deployment_image_overrides or {}
 
         self.load_app_json()
 
@@ -146,7 +148,8 @@ class HotelReservation(Application):
         Deployment/container overrides. Rendering a temporary manifest tree
         avoids a setup rollout and its misleading ReplicaSet history.
         """
-        if not self.deployment_env_overrides:
+        deployment_image_overrides = getattr(self, "deployment_image_overrides", {})
+        if not self.deployment_env_overrides and not deployment_image_overrides:
             yield Path(self.k8s_deploy_path)
             return
 
@@ -156,6 +159,11 @@ class HotelReservation(Application):
             unmatched = {
                 (deployment_name, container_name)
                 for deployment_name, containers in self.deployment_env_overrides.items()
+                for container_name in containers
+            }
+            unmatched_images = {
+                (deployment_name, container_name)
+                for deployment_name, containers in deployment_image_overrides.items()
                 for container_name in containers
             }
 
@@ -169,32 +177,38 @@ class HotelReservation(Application):
                         continue
                     deployment_name = document.get("metadata", {}).get("name")
                     container_overrides = self.deployment_env_overrides.get(deployment_name)
-                    if not container_overrides:
+                    image_overrides = deployment_image_overrides.get(deployment_name)
+                    if not container_overrides and not image_overrides:
                         continue
 
                     containers = document.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
                     for container in containers:
                         container_name = container.get("name")
-                        values = container_overrides.get(container_name)
-                        if not values:
-                            continue
-                        existing = [item for item in container.get("env", []) if item.get("name") not in values]
-                        container["env"] = [
-                            *existing,
-                            *({"name": name, "value": str(value)} for name, value in values.items()),
-                        ]
-                        unmatched.discard((deployment_name, container_name))
-                        changed = True
+                        values = (container_overrides or {}).get(container_name)
+                        if values:
+                            existing = [item for item in container.get("env", []) if item.get("name") not in values]
+                            container["env"] = [
+                                *existing,
+                                *({"name": name, "value": str(value)} for name, value in values.items()),
+                            ]
+                            unmatched.discard((deployment_name, container_name))
+                            changed = True
+                        image = (image_overrides or {}).get(container_name)
+                        if image:
+                            container["image"] = image
+                            unmatched_images.discard((deployment_name, container_name))
+                            changed = True
 
                 if changed:
                     with config_path.open("w") as config_file:
                         yaml.safe_dump_all(documents, config_file, sort_keys=False)
 
-            if unmatched:
+            if unmatched or unmatched_images:
                 targets = ", ".join(
-                    f"deployment/{deployment}:{container}" for deployment, container in sorted(unmatched)
+                    f"deployment/{deployment}:{container}"
+                    for deployment, container in sorted(unmatched | unmatched_images)
                 )
-                raise RuntimeError(f"deployment environment override targets were not found: {targets}")
+                raise RuntimeError(f"deployment override targets were not found: {targets}")
 
             yield rendered_path
 

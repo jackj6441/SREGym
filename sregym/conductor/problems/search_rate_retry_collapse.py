@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 
 from kubernetes import client
@@ -52,10 +53,17 @@ class SearchRateRetryCollapse(Problem):
     post_trigger_second_seconds = 25
 
     def __init__(self):
+        image = os.environ.get("SREGYM_HOTEL_CLOCK_SKEW_IMAGE")
+        if not image:
+            raise RuntimeError(
+                "search_rate_retry_collapse requires SREGYM_HOTEL_CLOCK_SKEW_IMAGE "
+                "so frontend and recommendation use the same timestamp-aware build in both experiment arms"
+            )
         super().__init__(
             app=HotelReservation(
                 mount_failure_scripts=False,
                 deployment_env_overrides=self._vulnerable_deployment_env(),
+                deployment_image_overrides=self._clock_contract_image_overrides(image),
             )
         )
         self.kubectl = KubeCtl()
@@ -80,6 +88,13 @@ class SearchRateRetryCollapse(Problem):
             expected=self.root_cause,
         )
         self.mitigation_oracle = SearchRateRetryMitigationOracle(problem=self)
+
+    @staticmethod
+    def _clock_contract_image_overrides(image: str) -> dict[str, dict[str, str]]:
+        return {
+            "frontend": {"hotel-reserv-frontend": image},
+            "recommendation": {"hotel-reserv-recommendation": image},
+        }
 
     @classmethod
     def _vulnerable_deployment_env(cls) -> dict[str, dict[str, dict[str, str]]]:

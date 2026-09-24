@@ -30,7 +30,7 @@ from sregym.conductor.submission import (
 from sregym.conductor.utils import is_ordered_subset
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
-from sregym.generators.noise.impl.clock_skew import DEFAULT_DURATION_SECONDS
+from sregym.generators.noise.impl.clock_skew import CLOCK_SKEW_PROFILE, DEFAULT_DURATION_SECONDS
 from sregym.generators.noise.manager import get_noise_manager
 from sregym.observer.jaeger import Jaeger
 from sregym.observer.otel_collector import OtelCollector
@@ -408,6 +408,13 @@ class Conductor:
             with self._phase("inject_fault"):
                 self._inject_fault()
 
+        # This deterministic treatment must be measured against the already
+        # established primary fault before the agent can observe either one.
+        if start_index == 0 and self.config.enable_noise and self.config.noise_profile == CLOCK_SKEW_PROFILE:
+            nm = get_noise_manager()
+            nm.start()
+            self.results["noise_preflight"] = "passed"
+
         if start_index < len(self.stage_sequence):
             stage = self.stage_sequence[start_index]
             stage_name: str = stage["name"]
@@ -470,6 +477,8 @@ class Conductor:
                 self.logger.info("[CLEANUP] NoiseManager stopped")
             except Exception as e:
                 self.logger.warning(f"Failed to stop NoiseManager: {e}")
+                if getattr(self.config, "noise_profile", None) == CLOCK_SKEW_PROFILE:
+                    cleanup_errors.append(f"noise_cleanup: {type(e).__name__}: {e}")
 
         if stop_late_cleanup():
             return
@@ -698,10 +707,12 @@ class Conductor:
                     "target_deployment": getattr(self.app, "frontend_service", None),
                     "noise_profile": self.config.noise_profile,
                     "noise_duration_seconds": self.config.noise_duration_seconds,
+                    "protected_workload": getattr(self.problem, "workload", None),
                 }
                 nm.set_problem_context(context)
-                nm.start()
-                self.results["noise_preflight"] = "passed"
+                if self.config.noise_profile != CLOCK_SKEW_PROFILE:
+                    nm.start()
+                    self.results["noise_preflight"] = "passed"
             except Exception as e:
                 self.logger.warning(f"Failed to update NoiseManager context: {e}")
                 if self.config.noise_profile is not None:

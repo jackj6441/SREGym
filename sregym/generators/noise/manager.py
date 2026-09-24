@@ -26,6 +26,7 @@ from sregym.generators.noise.impl.clock_skew import (
     DEFAULT_DURATION_SECONDS,
     ClockSkewObserver,
 )
+from sregym.generators.noise.impl.clock_skew_recommendation import ClockSkewRecommendation
 from sregym.service.kubectl import KubeCtl
 
 logger = logging.getLogger(__name__)
@@ -61,12 +62,14 @@ class NoiseManager:
         self.target_namespace: str | None = None
         self.target_deployment: str | None = None
         self.noise_profile: str | None = None
+        self.protected_workload = None
         self.duration_seconds = DEFAULT_DURATION_SECONDS
         self.active_experiments: list[dict[str, str]] = []
         self.active_workloads: list[dict[str, str]] = []
         self._background_thread: threading.Thread | None = None
         self._last_injection_time: float = 0
         self._deterministic_injected = False
+        self._deterministic_target: dict[str, str] | None = None
         self._lock = threading.Lock()
         self._chaos_mesh_ready = False
 
@@ -80,6 +83,7 @@ class NoiseManager:
         self.target_namespace = context.get("namespace")
         self.target_deployment = context.get("target_deployment")
         self.noise_profile = context.get("noise_profile")
+        self.protected_workload = context.get("protected_workload")
         self.duration_seconds = context.get("noise_duration_seconds", DEFAULT_DURATION_SECONDS)
         logger.info(f"Noise target namespace: {self.target_namespace}")
 
@@ -96,12 +100,31 @@ class NoiseManager:
             self.running = True
             try:
                 self._maybe_inject()
-            except Exception:
+            except Exception as injection_error:
                 self.running = False
-                if self._cleanup_experiments():
+                cleanup_confirmed = self._cleanup_experiments()
+                recovery_error = None
+                if cleanup_confirmed:
+                    if self._deterministic_target:
+                        try:
+                            ClockSkewRecommendation(self.kubectl, self.protected_workload).wait_for_recovery(
+                                self._deterministic_target
+                            )
+                        except Exception as error:
+                            recovery_error = error
                     self._cleanup_workloads()
+                    if recovery_error is None:
+                        self._deterministic_target = None
                 else:
                     self._force_remove_all_chaos_resources()
+                if not cleanup_confirmed:
+                    raise RuntimeError(
+                        "TimeChaos deletion could not be confirmed after failed preflight"
+                    ) from injection_error
+                if recovery_error is not None:
+                    raise RuntimeError(
+                        "Recommendation recovery could not be confirmed after failed preflight"
+                    ) from recovery_error
                 raise
             logger.info("Deterministic noise injection started.")
             return
@@ -126,12 +149,15 @@ class NoiseManager:
         if not self._cleanup_experiments():
             self._force_remove_all_chaos_resources()
             raise RuntimeError("Noise experiments could not be confirmed deleted; observer workload was left in place")
+        if self.noise_profile == CLOCK_SKEW_PROFILE and self._deterministic_target:
+            ClockSkewRecommendation(self.kubectl, self.protected_workload).wait_for_recovery(self._deterministic_target)
         self._cleanup_workloads()
         # Strip finalizers from any remaining chaos-mesh CRs so the namespace
         # can terminate cleanly when reconcile_to_baseline deletes it.
         self._force_remove_all_chaos_resources()
         self._last_injection_time = 0
         self._deterministic_injected = False
+        self._deterministic_target = None
         logger.info("Noise injection stopped.")
 
     # ── Background loop ───────────────────────────────────────────────
@@ -156,25 +182,19 @@ class NoiseManager:
                 if self._deterministic_injected or self.active_workloads or self.active_experiments:
                     return
 
-            if not self.target_deployment:
-                raise RuntimeError("The clock-skew profile requires a target deployment")
-            observer = ClockSkewObserver(self.kubectl)
-            resource = observer.inject(namespace=self.target_namespace, target_deployment=self.target_deployment)
-            with self._lock:
-                if self.running:
-                    self.active_workloads.append(resource)
-                else:
-                    observer.delete(resource)
-                    return
+            treatment = ClockSkewRecommendation(self.kubectl, self.protected_workload)
+            resource = treatment.select_target(self.target_namespace)
+            self._deterministic_target = resource
+            baseline = treatment.capture_baseline(resource)
             self._apply_experiment(
                 {
                     "name": CLOCK_SKEW_PROFILE,
                     "kind": "TimeChaos",
-                    "spec": ClockSkewObserver.time_chaos_spec(resource, duration_seconds=self.duration_seconds),
+                    "spec": treatment.time_chaos_spec(resource, duration_seconds=self.duration_seconds),
                 },
                 raise_on_error=True,
             )
-            observer.wait_for_treatment_effect(resource)
+            treatment.wait_for_treatment_effect(resource, baseline)
             with self._lock:
                 self._deterministic_injected = True
             self._last_injection_time = time.time()
@@ -201,7 +221,12 @@ class NoiseManager:
 
         timestamp = int(time.time())
         rand_suffix = random.randint(100, 999)
-        name = f"noise-{template['name']}-{timestamp}-{rand_suffix}"
+        if template["name"] == CLOCK_SKEW_PROFILE:
+            # The treatment is real, but must not advertise itself as noise to
+            # the agent through a Kubernetes resource name.
+            name = f"hotel-recommendation-{timestamp}-{rand_suffix}"
+        else:
+            name = f"noise-{template['name']}-{timestamp}-{rand_suffix}"
         kind = template["kind"]
 
         crd = {

@@ -1,6 +1,13 @@
-# Clock-skew noise profile
+# Historical clock-skew observer profile
 
-The `clock-skew` profile creates one non-critical
+> **Status:** This observer-Pod design predates the mandatory
+> [`noise-case-design-requirements.md`](agents/noise-case-design-requirements.md).
+> It has a verified stable lifecycle, but it is not the final conforming noise
+> design because it creates a benchmark-specific workload. Retain it only as
+> historical experiment context. The current recommendation-service design is
+> documented in [clock-skew-recommendation-noise.md](clock-skew-recommendation-noise.md).
+
+The former `clock-skew` profile created one non-critical
 `analytics-time-indexer` Pod on the same worker as the problem's frontend
 Pod. It is a real but isolated fault: Chaos Mesh applies a `+5m`
 `CLOCK_REALTIME` offset to only the Pod's `indexer` container.
@@ -52,7 +59,7 @@ and (when enabled) the clock-skew treatment. These checks are recorded only in
 the result artifacts. A failed check is infrastructure-incomplete and never
 counts as a model sample.
 
-## Run
+## Historical run command (do not use for the current profile)
 
 ```bash
 uv run main.py \
