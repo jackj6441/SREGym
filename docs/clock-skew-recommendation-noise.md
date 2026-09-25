@@ -117,3 +117,17 @@ new deploy uses the same image in all eight Go Deployments, normal
 `/recommendations` return the timestamp-specific 502 without improving
 `/hotels`, and cleanup removes TimeChaos. Codex may perform this smoke check;
 the user runs the matched Sol attempts and later Astra attempts.
+The repeatable smoke command is:
+
+```bash
+cd ~/SREGym
+export SREGYM_HOTEL_CLOCK_SKEW_IMAGE=sregym/hotel-reservation:20260924.1
+.venv/bin/python scripts/smoke_clock_skew_no_agent.py
+```
+
+The September 25 CloudLab smoke run passed: all eight Go Deployment images
+matched, recommendation changed from HTTP 200 to the expected HTTP 502, the
+primary queue stayed at 255 with search success 0.0 before and after noise,
+the target Pod UID stayed unchanged, and final cleanup removed TimeChaos and
+the application namespace. This is infrastructure validation, not an agent
+diagnosis/mitigation result.
