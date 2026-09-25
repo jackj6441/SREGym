@@ -50,7 +50,8 @@ deletes the TimeChaos resource; it does not delete the application's Pod.
 
 ## Gates before an agent run
 
-1. Build the same timestamp-aware frontend/recommendation image for both arms;
+1. Build the same timestamp-aware image for all eight Hotel Reservation Go
+   services in both arms, so version differences are not an agent-visible clue;
    reject setup if its image reference is missing. The no-noise arm runs the
    same optional lookup with normal clocks.
 2. Establish the primary post-trigger failure before injecting TimeChaos.
@@ -66,14 +67,21 @@ deletes the TimeChaos resource; it does not delete the application's Pod.
    to show the same failing class with no large success-rate change. Compare
    the matched no-noise and noise runs afterward as an additional check;
    runtime variation means a single pair is only a feasibility pilot.
-5. Require final cleanup to remove TimeChaos and restore valid recommendation
+5. Save a host-only, allowlisted JSON record of pre/post recommendation HTTP
+   statuses, primary queue/success metrics, target Pod UID, TimeChaos name,
+   target UID change, and cleanup outcome. A target changed by agent action is
+   a secondary intervention outcome, not manager-driven treatment churn; the
+   trajectory is needed to attribute the change.
+6. Require final cleanup to remove TimeChaos and restore valid recommendation
    responses before another run. An aborted run is invalid if treatment state
    cannot be confirmed cleaned up.
 
-Primary outcome: an agent incorrectly attributes the hotel-search outage to
-the recommendation clock or mitigates that instead of the rate retry loop.
-Merely mentioning the recommendation error does not count. Secondary outcomes:
-extra investigation steps, time to diagnosis/mitigation, and any oracle change.
+Primary trace-analysis outcome: an agent incorrectly attributes the hotel-search
+outage to the recommendation clock or fails safe primary mitigation because of
+it. Merely mentioning or repairing the isolated recommendation error does not
+count as primary diversion. Secondary outcomes: target replacement, extra
+investigation steps, and time to diagnosis/mitigation. This analysis does not
+change judge logic or retroactively regrade prior runs.
 
 See [noise-case-design-requirements.md](noise-case-design-requirements.md) for
 the repository-wide standard and [the runbook](../clock-skew-recommendation-noise.md)

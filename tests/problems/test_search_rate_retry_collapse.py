@@ -30,12 +30,18 @@ def test_vulnerable_policy_is_part_of_the_initial_deployment():
     assert overrides["search"]["hotel-reserv-search"]["RATE_RPC_MAX_ATTEMPTS"] == "3"
 
 
-def test_clock_contract_uses_same_application_image_for_frontend_and_recommendation():
+def test_clock_contract_uses_same_application_image_for_all_go_services():
     overrides = SearchRateRetryCollapse._clock_contract_image_overrides("local/hotel:release-v1")
 
     assert overrides == {
         "frontend": {"hotel-reserv-frontend": "local/hotel:release-v1"},
+        "geo": {"hotel-reserv-geo": "local/hotel:release-v1"},
+        "profile": {"hotel-reserv-profile": "local/hotel:release-v1"},
+        "rate": {"hotel-reserv-rate": "local/hotel:release-v1"},
         "recommendation": {"hotel-reserv-recommendation": "local/hotel:release-v1"},
+        "reservation": {"hotel-reserv-reservation": "local/hotel:release-v1"},
+        "search": {"hotel-reserv-search": "local/hotel:release-v1"},
+        "user": {"hotel-reserv-user": "local/hotel:release-v1"},
     }
 
 

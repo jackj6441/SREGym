@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from kubernetes.client.rest import ApiException
 
 from sregym.generators.noise.catalog import EXPERIMENT_CATALOG
 from sregym.generators.noise.impl.clock_skew import (
@@ -72,6 +73,7 @@ class NoiseManager:
         self._deterministic_target: dict[str, str] | None = None
         self._lock = threading.Lock()
         self._chaos_mesh_ready = False
+        self._evidence: dict[str, Any] = {}
 
     # ── Context from Conductor ────────────────────────────────────────
 
@@ -85,7 +87,25 @@ class NoiseManager:
         self.noise_profile = context.get("noise_profile")
         self.protected_workload = context.get("protected_workload")
         self.duration_seconds = context.get("noise_duration_seconds", DEFAULT_DURATION_SECONDS)
+        self._evidence = {"profile": self.noise_profile, "preflight": {"status": "not_started"}}
         logger.info(f"Noise target namespace: {self.target_namespace}")
+
+    def evidence_snapshot(self) -> dict[str, Any]:
+        """Host-only, allowlisted treatment evidence; never expose via the agent API."""
+        return copy.deepcopy(self._evidence)
+
+    def _record_target_identity_at_cleanup(self) -> None:
+        target = self._deterministic_target
+        if not target:
+            return
+        try:
+            pod = self.kubectl.core_v1_api.read_namespaced_pod(name=target["name"], namespace=target["namespace"])
+            changed: bool | None = pod.metadata.uid != target["uid"]
+        except ApiException as exc:
+            changed = True if exc.status == 404 else None
+        except Exception:
+            changed = None
+        self._evidence.setdefault("target", {})["changed_before_cleanup"] = changed
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -102,6 +122,8 @@ class NoiseManager:
                 self._maybe_inject()
             except Exception as injection_error:
                 self.running = False
+                self._evidence["preflight"]["status"] = "failed"
+                self._evidence["preflight"]["error_type"] = type(injection_error).__name__
                 cleanup_confirmed = self._cleanup_experiments()
                 recovery_error = None
                 if cleanup_confirmed:
@@ -143,6 +165,9 @@ class NoiseManager:
     def stop(self):
         """Stop the background loop and clean up all active experiments."""
         self.running = False
+        if self.noise_profile == CLOCK_SKEW_PROFILE:
+            self._record_target_identity_at_cleanup()
+            self._evidence["cleanup"] = {"status": "incomplete"}
         if self._background_thread:
             self._background_thread.join(timeout=5)
             self._background_thread = None
@@ -158,6 +183,8 @@ class NoiseManager:
         self._last_injection_time = 0
         self._deterministic_injected = False
         self._deterministic_target = None
+        if self.noise_profile == CLOCK_SKEW_PROFILE:
+            self._evidence["cleanup"]["status"] = "confirmed"
         logger.info("Noise injection stopped.")
 
     # ── Background loop ───────────────────────────────────────────────
@@ -185,7 +212,18 @@ class NoiseManager:
             treatment = ClockSkewRecommendation(self.kubectl, self.protected_workload)
             resource = treatment.select_target(self.target_namespace)
             self._deterministic_target = resource
+            self._evidence["target"] = {
+                "pod_name": resource["name"],
+                "pod_uid": resource["uid"],
+                "changed_before_cleanup": None,
+            }
             baseline = treatment.capture_baseline(resource)
+            self._evidence["preflight"] = {
+                "status": "baseline_confirmed",
+                "recommendation_status_before": 200,
+                "primary_queue_depth_before": getattr(baseline, "queue_depth", None),
+                "primary_search_success_before": getattr(baseline, "search_success_rate", None),
+            }
             self._apply_experiment(
                 {
                     "name": CLOCK_SKEW_PROFILE,
@@ -194,7 +232,17 @@ class NoiseManager:
                 },
                 raise_on_error=True,
             )
-            treatment.wait_for_treatment_effect(resource, baseline)
+            self._evidence["treatment"] = {
+                "timechaos_name": self.active_experiments[0]["name"],
+                "duration_seconds": self.duration_seconds,
+            }
+            effect = treatment.wait_for_treatment_effect(resource, baseline)
+            self._evidence["preflight"].update(
+                status="passed",
+                recommendation_status_after=effect.recommendation_status,
+                primary_queue_depth_after=effect.queue_depth,
+                primary_search_success_after=effect.search_success_rate,
+            )
             with self._lock:
                 self._deterministic_injected = True
             self._last_injection_time = time.time()

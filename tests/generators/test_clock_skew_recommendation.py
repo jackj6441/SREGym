@@ -3,7 +3,11 @@ from unittest.mock import Mock
 
 import pytest
 
-from sregym.generators.noise.impl.clock_skew_recommendation import ClockSkewRecommendation, TreatmentBaseline
+from sregym.generators.noise.impl.clock_skew_recommendation import (
+    ClockSkewRecommendation,
+    TreatmentBaseline,
+    TreatmentEffect,
+)
 
 
 def _pod(name, *, ready=True, container="hotel-reserv-recommendation"):
@@ -82,8 +86,9 @@ def test_preflight_accepts_real_recommendation_failure_without_changing_primary_
         ),
     )
 
-    treatment.wait_for_treatment_effect(target, TreatmentBaseline(endpoints, 256, 0.2))
+    effect = treatment.wait_for_treatment_effect(target, TreatmentBaseline(endpoints, 256, 0.2))
 
+    assert effect == TreatmentEffect(502, 256, 0.2)
     workload.metrics.snapshot.assert_called_once_with()
     workload.snapshot.assert_called_once_with(10)
 

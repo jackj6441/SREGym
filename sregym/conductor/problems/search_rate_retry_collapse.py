@@ -57,7 +57,7 @@ class SearchRateRetryCollapse(Problem):
         if not image:
             raise RuntimeError(
                 "search_rate_retry_collapse requires SREGYM_HOTEL_CLOCK_SKEW_IMAGE "
-                "so frontend and recommendation use the same timestamp-aware build in both experiment arms"
+                "so all Hotel Reservation Go services use the same build in both experiment arms"
             )
         super().__init__(
             app=HotelReservation(
@@ -92,8 +92,17 @@ class SearchRateRetryCollapse(Problem):
     @staticmethod
     def _clock_contract_image_overrides(image: str) -> dict[str, dict[str, str]]:
         return {
-            "frontend": {"hotel-reserv-frontend": image},
-            "recommendation": {"hotel-reserv-recommendation": image},
+            name: {f"hotel-reserv-{name}": image}
+            for name in (
+                "frontend",
+                "geo",
+                "profile",
+                "rate",
+                "recommendation",
+                "reservation",
+                "search",
+                "user",
+            )
         }
 
     @classmethod

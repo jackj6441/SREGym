@@ -26,6 +26,13 @@ class TreatmentBaseline:
     search_success_rate: float
 
 
+@dataclass(frozen=True)
+class TreatmentEffect:
+    recommendation_status: int
+    queue_depth: float
+    search_success_rate: float
+
+
 class ClockSkewRecommendation:
     """Target one existing Pod and fail closed unless its business result breaks."""
 
@@ -122,7 +129,7 @@ class ClockSkewRecommendation:
             raise RuntimeError("the primary search-rate fault was not active before TimeChaos")
         return TreatmentBaseline(self._endpoints(target["namespace"]), queue_depth, observed.success_rate)
 
-    def wait_for_treatment_effect(self, target: dict[str, str], baseline: TreatmentBaseline) -> None:
+    def wait_for_treatment_effect(self, target: dict[str, str], baseline: TreatmentBaseline) -> TreatmentEffect:
         deadline = time.monotonic() + self.treatment_effect_timeout_seconds
         while time.monotonic() < deadline:
             pod = self.kubectl.core_v1_api.read_namespaced_pod(name=target["name"], namespace=target["namespace"])
@@ -142,7 +149,7 @@ class ClockSkewRecommendation:
                     raise RuntimeError("the primary search-rate fault changed during clock-skew preflight")
                 if abs(observed.success_rate - baseline.search_success_rate) > 0.3:
                     raise RuntimeError("primary search success rate changed too much during clock-skew preflight")
-                return
+                return TreatmentEffect(response.status_code, metrics["rate_queue_depth"], observed.success_rate)
             time.sleep(self.poll_interval_seconds)
         raise TimeoutError("TimeChaos did not produce a future-dated recommendation failure")
 

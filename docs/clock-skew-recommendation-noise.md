@@ -9,8 +9,10 @@ changing the profile.
 
 ## What changes
 
-The same timestamp-aware Hotel Reservation application image is used for both
-arms. The recommendation service stamps each gRPC result with its generation
+The same timestamp-aware Hotel Reservation application image is used for all
+eight Go services in both arms (frontend, geo, profile, rate, recommendation,
+reservation, search, user). This avoids an obvious image-version clue while
+leaving database/cache sidecars unchanged. The recommendation service stamps each gRPC result with its generation
 time; frontend rejects results more than one minute ahead of its clock.
 `/hotels` starts a bounded, asynchronous recommendation lookup on every tenth
 request. Failure of this optional branch is logged but cannot change the
@@ -21,6 +23,10 @@ primary search/rate fault must remain unchanged.
 
 The profile injects once, targets the exact existing recommendation Pod, and
 is cleaned up only after mitigation validation. No observer Pod is created.
+If an agent rolls or replaces that Pod, the old exact-Pod treatment stops
+affecting the replacement. Record this as target replacement during the agent
+window and inspect the trajectory to determine whether the agent caused it;
+do not label it manager reinjection or a manager lifecycle failure.
 TimeChaos duration is a treatment TTL, not a reinjection interval. Its default
 is 7200 seconds; choose a longer explicit TTL if an attempt can last longer.
 
@@ -39,7 +45,7 @@ docker image inspect sregym/hotel-reservation:20260924.1 --format '{{.Id}}'
 `--force-build` in `main.py` builds the agent image, **not** this application
 image. The command above is required. If the Kubernetes cluster later has
 more than one node, make this application image available on every possible
-frontend/recommendation node or use a pullable, immutable image reference.
+Hotel Reservation Go-service node or use a pullable, immutable image reference.
 
 The user runs the attempts, not Codex. From the CloudLab shell, source the
 existing credential file without printing it, then set the non-secret image
@@ -82,6 +88,13 @@ backlogged, failing protected search workload. Inability to verify the Go
 process's actual clock effect aborts setup.
 
 After both attempts finish, inspect their `results/<run-id>/codex/` folders.
+For a clock-skew run, the host-only
+`results/<run-id>/codex/search_rate_retry_collapse_hotel_reservation/noise_evidence_attempt1.json`
+records verified preflight statuses/primary metrics, target Pod UID,
+TimeChaos name, target identity at cleanup, and cleanup status. It is outside
+the agent's `/logs` mount and contains no environment variables or credentials.
+`changed_before_cleanup: true` proves a target identity change, not who
+caused it; use the trajectory to distinguish agent action from cluster churn.
 Provide the two run IDs for trace analysis. The old `0924_1147` run is useful
 historical context but is not a matched control because it used the previous
 application image. A single new pair is a feasibility check, not an estimate
@@ -97,3 +110,10 @@ kubectl get pods -n hotel-reservation
 The TimeChaos object should be gone. The application namespace may already
 have been removed by normal final cleanup. If TimeChaos remains, do not begin
 another attempt until its cleanup state is diagnosed.
+
+Before the next agent run, a no-agent CloudLab smoke check should verify one
+new deploy uses the same image in all eight Go Deployments, normal
+`/recommendations` returns 200, the primary fault is active, TimeChaos makes
+`/recommendations` return the timestamp-specific 502 without improving
+`/hotels`, and cleanup removes TimeChaos. Codex may perform this smoke check;
+the user runs the matched Sol attempts and later Astra attempts.

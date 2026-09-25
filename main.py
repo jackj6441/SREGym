@@ -32,6 +32,7 @@ from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.generators.noise.impl.clock_skew import DEFAULT_DURATION_SECONDS, NOISE_PROFILES
+from sregym.generators.noise.manager import get_noise_manager
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, get_profile, set_profile
@@ -231,6 +232,23 @@ def _artifact_environment(run: RunArtifacts):
     finally:
         for name, value in previous.items():
             _restore_env_var(name, value)
+
+
+def _write_clock_skew_evidence(base_dir: Path, agent: str, problem_id: str, attempt: int) -> Path:
+    """Persist allowlisted treatment facts on the host, outside the agent's /logs mount."""
+    destination = base_dir / agent / problem_id / f"noise_evidence_attempt{attempt}.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    payload = get_noise_manager().evidence_snapshot()
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    with os.fdopen(os.open(destination, flags, 0o600), "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, indent=2, sort_keys=True, allow_nan=False)
+        stream.write("\n")
+    return destination
+
+
+def _clock_skew_evidence_enabled(conductor: Conductor) -> bool:
+    config = getattr(conductor, "config", None)
+    return bool(getattr(config, "enable_noise", False)) and getattr(config, "noise_profile", None) == "clock-skew"
 
 
 def driver_loop(
@@ -460,6 +478,10 @@ def driver_loop(
                         )
                     if deploy_cleanup_failed and conductor.results.get("run_status") != "incomplete":
                         conductor.record_incomplete_attempt("cleanup_failed")
+                    if _clock_skew_evidence_enabled(conductor):
+                        evidence = get_noise_manager().evidence_snapshot()
+                        if evidence.get("preflight", {}).get("status") == "failed":
+                            _write_clock_skew_evidence(base_dir, agent_to_run or "agent", pid, attempt)
                     snapshot = {
                         "problem_id": pid,
                         "attempt": attempt,
@@ -674,6 +696,8 @@ def driver_loop(
                     conductor.results.update(phase_results_columns(read_phase_ledger(conductor.phases.path)))
 
                 run_status = conductor.finalize_attempt_status()
+                if _clock_skew_evidence_enabled(conductor):
+                    _write_clock_skew_evidence(base_dir, agent_to_run or "agent", pid, attempt)
                 if conductor.results.get("cleanup_failed"):
                     abort_campaign_after_attempt = True
                 status_icon = "✅" if run_status == "complete" else "⚠️"
