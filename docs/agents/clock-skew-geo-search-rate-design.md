@@ -1,9 +1,11 @@
 # Geo clock skew beside search-rate retry collapse
 
-Status: proposed. Do not run an agent experiment until the no-agent gates below
-and a matched control pass. The existing `clock-skew` recommendation profile and
-its `20260924.1` image remain unchanged; this case uses `clock-skew-geo` and a
-new, separately tagged application image.
+Status: no-agent feasibility pilot passed; **not approved for an agent run**.
+The runtime gates below passed, but Geo does not satisfy the mandatory
+service-level isolation rule in the noise-case standard. Resolve that placement
+conflict before a formal experiment. The existing `clock-skew` recommendation
+profile and its `20260924.1` image remain unchanged; this case uses
+`clock-skew-geo` and a new, separately tagged application image.
 
 ## Primary fault and topology
 
@@ -39,15 +41,15 @@ every tenth `/hotels` request will invoke the same read-only RPC, log an
 optional failure, and never alter the protected request's response.
 
 **Geo is a sibling of Rate below Search, not downstream of Rate and not outside
-the protected transaction.** This is an explicit exception to the preferred
-service-level placement in [the noise-case standard](noise-case-design-requirements.md).
+the protected transaction.** This does not satisfy the mandatory isolation
+argument in [the noise-case standard](noise-case-design-requirements.md).
 The only defensible isolation is at the *consumer behavior* boundary: Search
 uses Geo's hotel IDs and ignores the new generation-time gRPC header; the new
 frontend browse/prefetch consumer validates the header and rejects a result
 more than one minute ahead of frontend time. This is not proof that shifting
-Geo's process clock is otherwise harmless. If the runtime non-interference
-checks show any extra `/hotels` effect, the Geo design fails and must not be
-used for an agent run.
+Geo's process clock is otherwise harmless. The operation-level argument and
+passing runtime checks cannot waive the structural gate. If those checks show
+any extra `/hotels` effect, the Geo design also fails its runtime gate.
 
 ## Fault mechanism and lifecycle
 
@@ -128,7 +130,8 @@ policy, the deterministic primary mitigation oracle passed in **both** arms:
 normal `/hotels` traffic recovered to 100% and stayed healthy after replaying
 the 40 req/s trigger. Geo treatment cleanup was confirmed, the target UID did
 not change, and the application namespace and TimeChaos list were empty.
-This is one feasibility pair, not proof of general causal non-interference.
+This is one feasibility pair, not proof of general causal non-interference or
+compliance with the service-level isolation rule.
 
 After tightening the paired gates, a further no-agent pair also printed
 `PAIR_PASS`. All eight running Go containers resolved to the same SHA-256

@@ -22,7 +22,9 @@ is on `/hotels`'s critical path, this pilot is invalid if the process-level
 clock change alters the main search response or Search/Rate fault behavior.
 The preflight checks endpoint identity, Rate queue, and protected search
 success. A matched no-agent control and treatment comparison is still
-required before any paid agent run.
+required, but passing it does **not** satisfy the repository's mandatory
+service-level isolation rule. Do not run a paid agent experiment until that
+placement conflict is resolved.
 
 ## Build and smoke check
 
@@ -85,9 +87,10 @@ Geo's direct status changes 200→502, both deterministic primary mitigation
 oracle checks pass, and the Geo treatment is removed cleanly. Treat one
 passing pair as feasibility evidence, not a statistical estimate.
 
-Only after those gates pass should the user run a matched control and
-treatment agent pair. The commands use the same app image; only `--noise` and
-the new profile differ:
+The following matched agent commands are held for a future placement decision;
+**do not run them for Geo under the current noise-case standard**, even though
+the no-agent gates passed. If the placement conflict is resolved, they use the
+same app image; only `--noise` and the new profile differ:
 
 ```bash
 .venv/bin/python main.py --force-build \
