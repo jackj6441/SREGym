@@ -34,13 +34,20 @@ is 7200 seconds; choose a longer explicit TTL if an attempt can last longer.
 
 The current CloudLab host has one `amd64` node with the Docker Kubernetes
 runtime. After obtaining a checkout containing both the parent repository and
-the updated `SREGym-applications` submodule, run on CloudLab:
+the recommendation-era `SREGym-applications` submodule at commit
+`0575eb29b3b5f32dc019ebaf720f100ed06c80b8`, run on CloudLab:
 
 ```bash
 cd ~/SREGym
 docker build -t sregym/hotel-reservation:20260924.1 SREGym-applications/hotelReservation
 docker image inspect sregym/hotel-reservation:20260924.1 --format '{{.Id}}'
 ```
+
+Do **not** rebuild the `20260924.1` tag from a later submodule checkout that
+contains the separate Geo variant: its frontend optional branch has changed.
+Keep the existing recommendation image, or build it from the pinned submodule
+commit in a separate checkout. The Geo pilot uses a different image tag and
+its own [runbook](clock-skew-geo-noise.md).
 
 `--force-build` in `main.py` builds the agent image, **not** this application
 image. The command above is required. If the Kubernetes cluster later has

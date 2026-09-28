@@ -248,7 +248,7 @@ def _write_clock_skew_evidence(base_dir: Path, agent: str, problem_id: str, atte
 
 def _clock_skew_evidence_enabled(conductor: Conductor) -> bool:
     config = getattr(conductor, "config", None)
-    return bool(getattr(config, "enable_noise", False)) and getattr(config, "noise_profile", None) == "clock-skew"
+    return bool(getattr(config, "enable_noise", False)) and getattr(config, "noise_profile", None) in NOISE_PROFILES
 
 
 def driver_loop(

@@ -88,3 +88,11 @@ requires `frontend -> search -> geo/rate`, then reservation availability and
 profile. The clock-skew treatment targets only the existing recommendation
 Pod. See [`clock-skew-search-rate-design.md`](clock-skew-search-rate-design.md)
 for the non-interference argument and runtime validation gates.
+
+The separate `clock-skew-geo` pilot uses a new application image. In it,
+frontend's optional every-tenth `/hotels` lookup targets Geo instead of
+Recommendation, and a read-only `/nearby-hotels` route exposes Geo's
+timestamp-validated business result. Search's original Geo call still uses
+hotel IDs without timestamp validation. Geo remains on the protected search
+path, parallel to Rate rather than downstream of it; see the explicit risk and
+stop conditions in [`clock-skew-geo-search-rate-design.md`](clock-skew-geo-search-rate-design.md).

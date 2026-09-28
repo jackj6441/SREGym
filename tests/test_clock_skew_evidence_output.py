@@ -33,3 +33,13 @@ def test_clock_skew_evidence_is_saved_outside_agent_artifacts(tmp_path, monkeypa
     assert path == tmp_path / "codex" / "search_rate_retry_collapse_hotel_reservation" / "noise_evidence_attempt2.json"
     assert json.loads(path.read_text()) == evidence
     assert path.stat().st_mode & 0o077 == 0
+
+
+def test_both_clock_skew_profiles_save_host_only_evidence():
+    main = _load_main()
+    for profile in ("clock-skew", "clock-skew-geo"):
+        conductor = SimpleNamespace(config=SimpleNamespace(enable_noise=True, noise_profile=profile))
+        assert main._clock_skew_evidence_enabled(conductor)
+
+    control = SimpleNamespace(config=SimpleNamespace(enable_noise=False, noise_profile=None))
+    assert not main._clock_skew_evidence_enabled(control)

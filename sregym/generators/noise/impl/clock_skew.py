@@ -14,7 +14,8 @@ from sregym.service.kubectl import KubeCtl
 logger = logging.getLogger(__name__)
 
 CLOCK_SKEW_PROFILE = "clock-skew"
-NOISE_PROFILES = (CLOCK_SKEW_PROFILE,)
+CLOCK_SKEW_GEO_PROFILE = "clock-skew-geo"
+NOISE_PROFILES = (CLOCK_SKEW_PROFILE, CLOCK_SKEW_GEO_PROFILE)
 # Cover two long agent stages plus oracle evaluation without silently losing
 # the deterministic treatment before final cleanup.
 DEFAULT_DURATION_SECONDS = 7200

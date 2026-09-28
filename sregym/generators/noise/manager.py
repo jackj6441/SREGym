@@ -23,10 +23,12 @@ from kubernetes.client.rest import ApiException
 
 from sregym.generators.noise.catalog import EXPERIMENT_CATALOG
 from sregym.generators.noise.impl.clock_skew import (
-    CLOCK_SKEW_PROFILE,
+    CLOCK_SKEW_GEO_PROFILE,
     DEFAULT_DURATION_SECONDS,
+    NOISE_PROFILES,
     ClockSkewObserver,
 )
+from sregym.generators.noise.impl.clock_skew_geo import ClockSkewGeo
 from sregym.generators.noise.impl.clock_skew_recommendation import ClockSkewRecommendation
 from sregym.service.kubectl import KubeCtl
 
@@ -39,6 +41,7 @@ DURATION = 120  # seconds each experiment lives
 COOLDOWN = 300  # seconds between injection cycles
 CLEANUP_TIMEOUT_SECONDS = 30
 CLEANUP_FINALIZER_GRACE_SECONDS = 5
+DETERMINISTIC_PROFILES = frozenset(NOISE_PROFILES)
 
 
 class NoiseManager:
@@ -94,6 +97,13 @@ class NoiseManager:
         """Host-only, allowlisted treatment evidence; never expose via the agent API."""
         return copy.deepcopy(self._evidence)
 
+    def _treatment(self):
+        treatment_type = ClockSkewGeo if self.noise_profile == CLOCK_SKEW_GEO_PROFILE else ClockSkewRecommendation
+        return treatment_type(self.kubectl, self.protected_workload)
+
+    def _status_key(self) -> str:
+        return "geo_status" if self.noise_profile == CLOCK_SKEW_GEO_PROFILE else "recommendation_status"
+
     def _record_target_identity_at_cleanup(self) -> None:
         target = self._deterministic_target
         if not target:
@@ -113,7 +123,7 @@ class NoiseManager:
         """Start the selected noise profile."""
         if self.running:
             return
-        if self.noise_profile == CLOCK_SKEW_PROFILE:
+        if self.noise_profile in DETERMINISTIC_PROFILES:
             self._ensure_chaos_mesh_installed()
             if not self._chaos_mesh_ready:
                 raise RuntimeError("The clock-skew profile requires Chaos Mesh to be ready")
@@ -129,9 +139,7 @@ class NoiseManager:
                 if cleanup_confirmed:
                     if self._deterministic_target:
                         try:
-                            ClockSkewRecommendation(self.kubectl, self.protected_workload).wait_for_recovery(
-                                self._deterministic_target
-                            )
+                            self._treatment().wait_for_recovery(self._deterministic_target)
                         except Exception as error:
                             recovery_error = error
                     self._cleanup_workloads()
@@ -145,7 +153,7 @@ class NoiseManager:
                     ) from injection_error
                 if recovery_error is not None:
                     raise RuntimeError(
-                        "Recommendation recovery could not be confirmed after failed preflight"
+                        "Clock-skew target recovery could not be confirmed after failed preflight"
                     ) from recovery_error
                 raise
             logger.info("Deterministic noise injection started.")
@@ -165,7 +173,7 @@ class NoiseManager:
     def stop(self):
         """Stop the background loop and clean up all active experiments."""
         self.running = False
-        if self.noise_profile == CLOCK_SKEW_PROFILE:
+        if self.noise_profile in DETERMINISTIC_PROFILES:
             self._record_target_identity_at_cleanup()
             self._evidence["cleanup"] = {"status": "incomplete"}
         if self._background_thread:
@@ -174,8 +182,8 @@ class NoiseManager:
         if not self._cleanup_experiments():
             self._force_remove_all_chaos_resources()
             raise RuntimeError("Noise experiments could not be confirmed deleted; observer workload was left in place")
-        if self.noise_profile == CLOCK_SKEW_PROFILE and self._deterministic_target:
-            ClockSkewRecommendation(self.kubectl, self.protected_workload).wait_for_recovery(self._deterministic_target)
+        if self.noise_profile in DETERMINISTIC_PROFILES and self._deterministic_target:
+            self._treatment().wait_for_recovery(self._deterministic_target)
         self._cleanup_workloads()
         # Strip finalizers from any remaining chaos-mesh CRs so the namespace
         # can terminate cleanly when reconcile_to_baseline deletes it.
@@ -183,7 +191,7 @@ class NoiseManager:
         self._last_injection_time = 0
         self._deterministic_injected = False
         self._deterministic_target = None
-        if self.noise_profile == CLOCK_SKEW_PROFILE:
+        if self.noise_profile in DETERMINISTIC_PROFILES:
             self._evidence["cleanup"]["status"] = "confirmed"
         logger.info("Noise injection stopped.")
 
@@ -201,7 +209,7 @@ class NoiseManager:
         if not self.target_namespace:
             return
 
-        if self.noise_profile == CLOCK_SKEW_PROFILE:
+        if self.noise_profile in DETERMINISTIC_PROFILES:
             # A deterministic profile is one treatment for the full attempt.
             # Replacing its resources would create new identities and a gap in
             # treatment, both of which are artificial experimental clues.
@@ -209,7 +217,7 @@ class NoiseManager:
                 if self._deterministic_injected or self.active_workloads or self.active_experiments:
                     return
 
-            treatment = ClockSkewRecommendation(self.kubectl, self.protected_workload)
+            treatment = self._treatment()
             resource = treatment.select_target(self.target_namespace)
             self._deterministic_target = resource
             self._evidence["target"] = {
@@ -220,13 +228,13 @@ class NoiseManager:
             baseline = treatment.capture_baseline(resource)
             self._evidence["preflight"] = {
                 "status": "baseline_confirmed",
-                "recommendation_status_before": 200,
+                f"{self._status_key()}_before": 200,
                 "primary_queue_depth_before": getattr(baseline, "queue_depth", None),
                 "primary_search_success_before": getattr(baseline, "search_success_rate", None),
             }
             self._apply_experiment(
                 {
-                    "name": CLOCK_SKEW_PROFILE,
+                    "name": self.noise_profile,
                     "kind": "TimeChaos",
                     "spec": treatment.time_chaos_spec(resource, duration_seconds=self.duration_seconds),
                 },
@@ -239,7 +247,7 @@ class NoiseManager:
             effect = treatment.wait_for_treatment_effect(resource, baseline)
             self._evidence["preflight"].update(
                 status="passed",
-                recommendation_status_after=effect.recommendation_status,
+                **{f"{self._status_key()}_after": effect.recommendation_status},
                 primary_queue_depth_after=effect.queue_depth,
                 primary_search_success_after=effect.search_success_rate,
             )
@@ -269,10 +277,11 @@ class NoiseManager:
 
         timestamp = int(time.time())
         rand_suffix = random.randint(100, 999)
-        if template["name"] == CLOCK_SKEW_PROFILE:
+        if template["name"] in DETERMINISTIC_PROFILES:
             # The treatment is real, but must not advertise itself as noise to
             # the agent through a Kubernetes resource name.
-            name = f"hotel-recommendation-{timestamp}-{rand_suffix}"
+            target = "geo" if template["name"] == CLOCK_SKEW_GEO_PROFILE else "recommendation"
+            name = f"hotel-{target}-{timestamp}-{rand_suffix}"
         else:
             name = f"noise-{template['name']}-{timestamp}-{rand_suffix}"
         kind = template["kind"]

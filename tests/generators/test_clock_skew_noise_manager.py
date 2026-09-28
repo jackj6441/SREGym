@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from sregym.generators.noise import manager
-from sregym.generators.noise.impl.clock_skew import CLOCK_SKEW_PROFILE
+from sregym.generators.noise.impl.clock_skew import CLOCK_SKEW_GEO_PROFILE, CLOCK_SKEW_PROFILE
 
 
 @pytest.fixture
@@ -30,6 +30,34 @@ def _mock_treatment(monkeypatch):
     treatment_type = Mock(return_value=treatment)
     monkeypatch.setattr(manager, "ClockSkewRecommendation", treatment_type)
     return treatment, treatment_type, target
+
+
+def test_geo_profile_uses_geo_treatment_and_records_geo_evidence(noise_manager, monkeypatch):
+    noise, kubectl = noise_manager
+    target = {"name": "geo-abc", "uid": "geo-uid", "namespace": "hotel-reservation"}
+    treatment = Mock()
+    treatment.select_target.return_value = target
+    treatment.capture_baseline.return_value = SimpleNamespace(queue_depth=256, search_success_rate=0.0)
+    treatment.wait_for_treatment_effect.return_value = SimpleNamespace(
+        recommendation_status=502, queue_depth=255, search_success_rate=0.0
+    )
+    treatment.time_chaos_spec.return_value = {"containerNames": ["hotel-reserv-geo"]}
+    treatment_type = Mock(return_value=treatment)
+    monkeypatch.setattr(manager, "ClockSkewGeo", treatment_type)
+    monkeypatch.setattr(noise, "_ensure_chaos_mesh_installed", lambda: setattr(noise, "_chaos_mesh_ready", True))
+    noise.set_problem_context({"namespace": "hotel-reservation", "noise_profile": CLOCK_SKEW_GEO_PROFILE})
+
+    noise.start()
+
+    treatment_type.assert_called_once_with(kubectl, None)
+    assert noise.active_experiments[0]["name"].startswith("hotel-geo-")
+    assert noise.evidence_snapshot()["preflight"]["geo_status_before"] == 200
+    assert noise.evidence_snapshot()["preflight"]["geo_status_after"] == 502
+    assert "recommendation_status_before" not in noise.evidence_snapshot()["preflight"]
+    monkeypatch.setattr(noise, "_cleanup_experiments", Mock(return_value=True))
+    monkeypatch.setattr(noise, "_force_remove_all_chaos_resources", Mock())
+    noise.stop()
+    treatment.wait_for_recovery.assert_called_once_with(target)
 
 
 def test_clock_profile_uses_existing_recommendation_pod_and_one_time_chaos_before_agent(noise_manager, monkeypatch):
