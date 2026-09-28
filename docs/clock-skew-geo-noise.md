@@ -36,7 +36,9 @@ docker build -t sregym/hotel-reservation:geo-clock-skew-1 SREGym-applications/ho
 docker image inspect sregym/hotel-reservation:geo-clock-skew-1 --format '{{.Id}}'
 ```
 
-Use the same image reference in the no-noise and Geo-treatment arms. The
+Use the same image reference in the no-noise and Geo-treatment arms. The paired
+runner also compares the resolved SHA-256 image ID of all eight running Go
+containers across arms, because the local tag can otherwise be rebuilt. The
 existing `SREGYM_HOTEL_CLOCK_SKEW_IMAGE` variable is an image selector for
 this primary problem; its name is historical and does not choose the noise
 profile. Source the existing credential file without printing it:
@@ -77,6 +79,8 @@ export SREGYM_HOTEL_CLOCK_SKEW_IMAGE=sregym/hotel-reservation:geo-clock-skew-1
 
 It fails closed unless both 60-second windows retain the primary retry/queue
 failure, their request/timeout/rejection counters differ by no more than 15%,
+running image IDs match, critical Service endpoint addresses stay fixed within
+each arm, ready endpoint counts match across arms,
 Geo's direct status changes 200→502, both deterministic primary mitigation
 oracle checks pass, and the Geo treatment is removed cleanly. Treat one
 passing pair as feasibility evidence, not a statistical estimate.

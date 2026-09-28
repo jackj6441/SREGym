@@ -67,16 +67,19 @@ recorded as a separate intervention, not silently retargeted.
 
 ## Automatic gates and experiment plan
 
-1. Require all eight Go Deployments in each arm to use one immutable image
-   reference. Use the same new Geo image for both the no-noise and treatment
-   arms. Keep the historical Recommend image and `clock-skew` profile runnable.
+1. Require all eight Go Deployments in each arm to use one image reference and
+   resolve to one immutable running-container SHA-256 image ID. Compare the
+   resolved image IDs across the no-noise and Geo-treatment arms, so a mutable
+   local tag cannot conceal a rebuild between them. Keep the historical
+   Recommend image and `clock-skew` profile runnable.
 2. Require exactly one Ready Geo Pod and a healthy direct browse response
    before injection. Require active primary failure before treatment: backed-up
    Rate queue and low `/hotels` success.
 3. After injection, require the same Geo Pod UID to remain Running/Ready,
    direct browse to fail specifically because its timestamp is ahead of
    frontend time, and a sampled optional-lookup warning in frontend logs.
-4. Require unchanged Frontend, Search, Geo, and Rate Service endpoints; a
+4. Require unchanged Frontend, Search, Geo, and Rate Service endpoint addresses
+   within each arm and the same ready endpoint counts across arms; a
    still-backed-up Rate queue; and the same low-success class of protected
    `/hotels` requests. A large success-rate change fails setup.
 5. Compare a matched, no-agent 60-second post-trigger window in both arms:
@@ -126,6 +129,16 @@ normal `/hotels` traffic recovered to 100% and stayed healthy after replaying
 the 40 req/s trigger. Geo treatment cleanup was confirmed, the target UID did
 not change, and the application namespace and TimeChaos list were empty.
 This is one feasibility pair, not proof of general causal non-interference.
+
+After tightening the paired gates, a further no-agent pair also printed
+`PAIR_PASS`. All eight running Go containers resolved to the same SHA-256
+image ID in both arms; Frontend, Search, Geo, and Rate each retained one stable
+Ready endpoint within its 60-second window. Control versus treatment showed
+Search→Rate attempts 1,447 versus 1,442, Rate receives 1,446 versus 1,442,
+expired requests 1,202 in both, and 0/480 successful `/hotels` requests in
+both. Geo's direct route changed 200→502, both mitigation oracles passed,
+and cleanup left no application namespace or TimeChaos object. This remains
+a feasibility check, not a statistical estimate or a topology-policy waiver.
 
 See [the noise-case standard](noise-case-design-requirements.md) and the
 operator [Geo runbook](../clock-skew-geo-noise.md).

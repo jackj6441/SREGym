@@ -33,7 +33,7 @@ def run_arm(*, treatment: bool) -> dict:
     assert process.stdout is not None
     for line in process.stdout:
         print(line, end="", flush=True)
-        for marker in ("SMOKE_WINDOW", "SMOKE_ORACLE", "SMOKE_PREFLIGHT", "SMOKE_FINAL"):
+        for marker in ("SMOKE_TOPOLOGY", "SMOKE_WINDOW", "SMOKE_ORACLE", "SMOKE_PREFLIGHT", "SMOKE_FINAL"):
             if line.startswith(marker + " "):
                 records[marker] = json.loads(line[len(marker) + 1 :])
     if process.wait() != 0:
@@ -50,13 +50,29 @@ def run_arm(*, treatment: bool) -> dict:
             raise RuntimeError("Geo treatment symptom was not confirmed")
         if records.get("SMOKE_FINAL", {}).get("cleanup", {}).get("status") != "confirmed":
             raise RuntimeError("Geo treatment cleanup was not confirmed")
+    topology = records.get("SMOKE_TOPOLOGY")
+    if not topology or len(set(topology.get("digests", {}).values())) != 1:
+        raise RuntimeError(f"{arm} has no single resolved image digest")
+    if set(topology.get("endpoints", {})) != {"frontend", "search", "geo", "rate"}:
+        raise RuntimeError(f"{arm} has incomplete critical-path Service endpoints")
+    if any(len(addresses) != 1 for addresses in topology["endpoints"].values()):
+        raise RuntimeError(f"{arm} has an unexpected critical-path endpoint count")
     window = records.get("SMOKE_WINDOW")
     if not window:
         raise RuntimeError(f"{arm} arm produced no 60-second window")
+    window["topology"] = topology
     return window
 
 
 def compare_windows(control: dict, treatment: dict) -> None:
+    control_topology = control["topology"]
+    treatment_topology = treatment["topology"]
+    if control_topology["digests"] != treatment_topology["digests"]:
+        raise AssertionError("control and Geo treatment used different resolved image digests")
+    control_counts = {name: len(addresses) for name, addresses in control_topology["endpoints"].items()}
+    treatment_counts = {name: len(addresses) for name, addresses in treatment_topology["endpoints"].items()}
+    if control_counts != treatment_counts:
+        raise AssertionError("control and Geo treatment had different critical-path endpoint counts")
     for arm, window in (("control", control), ("treatment", treatment)):
         workload = window["workload"]
         if workload["submitted"] < 450 or workload["completed"] < 450:
