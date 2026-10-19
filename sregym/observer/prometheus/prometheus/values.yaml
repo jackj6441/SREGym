@@ -717,7 +717,9 @@ serverFiles:
           rules:
             - alert: PodStatusError
               expr: |
-                sum by (namespace, pod, reason) (
+                # A Pod can alternate between ErrImagePull and ImagePullBackOff;
+                # group by Pod so the one-minute waiting interval is continuous.
+                sum by (namespace, pod) (
                   kube_pod_container_status_waiting_reason{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster"} > 0
                 )
               for: 1m
@@ -725,7 +727,7 @@ serverFiles:
                 severity: critical
               annotations:
                 summary: "Pod startup failure: {{ $labels.pod }}"
-                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is stuck in {{ $labels.reason }}."
+                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has a container waiting to start."
 
             - alert: FailedPodsDetected
               expr: |
@@ -776,7 +778,7 @@ serverFiles:
 
             - alert: TiDBInstanceNotReady
               expr: |
-                (tidb_server_connections == 0 or absent(tidb_server_connections))
+                (up{job="tidb-cluster"} == 0 or absent(up{job="tidb-cluster"}))
                   and on ()
                 (count(kube_namespace_labels{namespace="tidb-cluster"}) > 0)
               for: 2m
@@ -787,7 +789,10 @@ serverFiles:
                 description: "TiDB instance {{ $labels.instance }} has been unreachable or has no connections for more than 2 minutes."
 
             - alert: TiDBStatefulSetNotReady
-              expr: group by (statefulset) (kube_statefulset_replicas{namespace="tidb-cluster"} - kube_statefulset_status_replicas_ready) > 0
+              expr: |
+                max by (namespace, statefulset) (kube_statefulset_replicas{namespace="tidb-cluster"})
+                  - on (namespace, statefulset)
+                max by (namespace, statefulset) (kube_statefulset_status_replicas_ready{namespace="tidb-cluster"}) > 0
               for: 2m
               labels:
                 severity: critical
@@ -899,21 +904,38 @@ serverFiles:
 
             - alert: HighRequestErrorRate
               # Locust load generator error detection (astronomy-shop).
-              # Fires when any endpoint has failures and enough requests to be meaningful.
+              # Keep the legacy rule for other endpoints; checkout uses a recent window below.
               expr: |
                 (
-                  locust_requests_num_failures{namespace="astronomy-shop", name!="Aggregated"}
+                  locust_requests_num_failures{namespace="astronomy-shop", name!~"Aggregated|/api/checkout"}
                     /
-                  locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"}
+                  locust_requests_num_requests{namespace="astronomy-shop", name!~"Aggregated|/api/checkout"}
                 ) > 0.1
                   and
-                locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"} > 0
+                locust_requests_num_requests{namespace="astronomy-shop", name!~"Aggregated|/api/checkout"} > 0
               for: 1m
               labels:
                 severity: critical
               annotations:
                 summary: "High error rate: {{ $labels.method }} {{ $labels.name }}"
                 description: "Endpoint {{ $labels.method }} {{ $labels.name }} in {{ $labels.namespace }} has an elevated failure ratio (current: {{ $value | printf \"%.2f\" }})."
+
+            - alert: HighRequestErrorRate
+              # A recent failure ratio lets the checkout alert clear when mitigation succeeds.
+              expr: |
+                (
+                  rate(locust_requests_num_failures{namespace="astronomy-shop", method="POST", name="/api/checkout"}[2m])
+                    /
+                  rate(locust_requests_num_requests{namespace="astronomy-shop", method="POST", name="/api/checkout"}[2m])
+                ) > 0.1
+                  and
+                rate(locust_requests_num_requests{namespace="astronomy-shop", method="POST", name="/api/checkout"}[2m]) > 0
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                summary: "High error rate: {{ $labels.method }} {{ $labels.name }}"
+                description: "Endpoint {{ $labels.method }} {{ $labels.name }} in {{ $labels.namespace }} has an elevated recent failure ratio (current: {{ $value | printf \"%.2f\" }})."
 
             - alert: HighRequestRate
               # Detects abnormal traffic spikes (e.g. load generator flooding).
@@ -1001,6 +1023,17 @@ serverFiles:
                 description: "Producers are outpacing the slowest consumer in {{ $labels.namespace }} by {{ $value | printf \"%.1f\" }}x. Messages may be accumulating in the queue."
 
         # ---- Blackbox endpoint probe alerts ----
+        - name: app.recommendation-client
+          rules:
+            - alert: RecommendationRpcTimeouts
+              expr: hotel_recommendation_rpc_timeout_ratio{namespace="hotel-reservation",service="recommendation"} > 0.1
+              for: 1m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Recommendation requests are timing out"
+                description: "More than 10% of recommendation RPCs have exceeded the client deadline."
+
         # Apps: astronomy-shop (16 endpoints), hotel-reservation (8 endpoints), social-network (13 endpoints)
         - name: app.endpoints
           rules:
@@ -1021,12 +1054,14 @@ serverFiles:
                 description: "Service endpoint {{ $labels.instance }} in {{ $labels.namespace }} is unreachable."
 
             - alert: HTTPProbeFailure
-              # Only fires when the nginx ingress controller is running
-              # (deployed exclusively by the ingress_misroute problem).
+              # Fleet Cast also deploys nginx. Require an Ingress in the probed
+              # app namespace so a healthy Hotel deployment is not an incident.
               expr: |
                 probe_success{job=~"blackbox-ingress-.*"} == 0
                   and on ()
                 (kube_deployment_status_replicas_available{namespace="ingress-nginx", deployment="ingress-nginx-controller"} > 0)
+                  and on (namespace)
+                (kube_ingress_info > 0)
               for: 30s
               labels:
                 severity: critical
@@ -1130,6 +1165,12 @@ serverFiles:
 # must be a string so you have to add a | after extraScrapeConfigs:
 # example adds prometheus-blackbox-exporter scrape config
 extraScrapeConfigs: |
+  - job_name: 'hotel-recommendation-client'
+    honor_labels: true
+    static_configs:
+      - targets:
+          - prometheus-prometheus-pushgateway.observe.svc:9091
+
   # ---- Blackbox TCP probes for app service endpoints ----
   # Probes each service's ClusterIP:port via the blackbox exporter.
 

@@ -22,6 +22,10 @@ import yaml
 from kubernetes.client.rest import ApiException
 
 from sregym.generators.noise.catalog import EXPERIMENT_CATALOG
+from sregym.generators.noise.impl.astronomy_ad_image import (
+    ASTRONOMY_AD_IMAGE_PROFILE,
+    AstronomyAdImageTreatment,
+)
 from sregym.generators.noise.impl.clock_skew import (
     CLOCK_SKEW_GEO_PROFILE,
     DEFAULT_DURATION_SECONDS,
@@ -65,6 +69,8 @@ class NoiseManager:
         self.current_stage: str | None = None
         self.target_namespace: str | None = None
         self.target_deployment: str | None = None
+        self.problem_id: str | None = None
+        self.problem = None
         self.noise_profile: str | None = None
         self.protected_workload = None
         self.duration_seconds = DEFAULT_DURATION_SECONDS
@@ -77,6 +83,7 @@ class NoiseManager:
         self._lock = threading.Lock()
         self._chaos_mesh_ready = False
         self._evidence: dict[str, Any] = {}
+        self._astronomy_ad_treatment: AstronomyAdImageTreatment | None = None
 
     # ── Context from Conductor ────────────────────────────────────────
 
@@ -87,6 +94,8 @@ class NoiseManager:
     def set_problem_context(self, context: dict[str, Any]):
         self.target_namespace = context.get("namespace")
         self.target_deployment = context.get("target_deployment")
+        self.problem_id = context.get("problem_id")
+        self.problem = context.get("problem")
         self.noise_profile = context.get("noise_profile")
         self.protected_workload = context.get("protected_workload")
         self.duration_seconds = context.get("noise_duration_seconds", DEFAULT_DURATION_SECONDS)
@@ -122,6 +131,19 @@ class NoiseManager:
     def start(self):
         """Start the selected noise profile."""
         if self.running:
+            return
+        if self.noise_profile == ASTRONOMY_AD_IMAGE_PROFILE:
+            if self.problem_id != "incorrect_port_assignment" or not self.problem:
+                raise RuntimeError("ad image treatment requires incorrect_port_assignment")
+            self._astronomy_ad_treatment = AstronomyAdImageTreatment(
+                self.kubectl, self.target_namespace, self.problem
+            )
+            try:
+                self._evidence = self._astronomy_ad_treatment.start()
+            except Exception:
+                self._evidence = copy.deepcopy(self._astronomy_ad_treatment.evidence)
+                raise
+            self.running = True
             return
         if self.noise_profile in DETERMINISTIC_PROFILES:
             self._ensure_chaos_mesh_installed()
@@ -173,6 +195,11 @@ class NoiseManager:
     def stop(self):
         """Stop the background loop and clean up all active experiments."""
         self.running = False
+        if self.noise_profile == ASTRONOMY_AD_IMAGE_PROFILE:
+            if self._astronomy_ad_treatment is not None:
+                self._evidence = self._astronomy_ad_treatment.stop()
+                self._astronomy_ad_treatment = None
+            return
         if self.noise_profile in DETERMINISTIC_PROFILES:
             self._record_target_identity_at_cleanup()
             self._evidence["cleanup"] = {"status": "incomplete"}

@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>五应用、多故障告警实验报告</title>
+  <style>
+    :root { color-scheme: light; }
+    body { max-width: 1000px; margin: 36px auto; padding: 0 24px; color: #222; background: #fff; font: 16px/1.6 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    h1 { font-size: 1.75rem; line-height: 1.3; margin: 0 0 4px; }
+    h2 { font-size: 1.2rem; margin: 32px 0 10px; padding-bottom: 5px; border-bottom: 1px solid #ccc; }
+    h3 { font-size: 1.05rem; margin: 25px 0 8px; }
+    p, ul, ol { margin: 8px 0 14px; }
+    li { margin: 5px 0; }
+    .meta, .note { color: #555; font-size: .92rem; }
+    .lead { margin-top: 18px; }
+    blockquote { margin: 10px 0 16px; padding: 3px 14px; border-left: 3px solid #bbb; }
+    .table-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+    caption { text-align: left; font-weight: 600; padding-bottom: 7px; }
+    th, td { border: 1px solid #bbb; padding: 7px 9px; text-align: left; vertical-align: top; }
+    th { background: #f3f3f3; }
+    code { font: .9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #f6f6f6; padding: 1px 3px; overflow-wrap: anywhere; }
+    pre { margin: 6px 0 10px; padding: 9px 11px; border: 1px solid #ddd; background: #f8f8f8; white-space: pre-wrap; overflow-wrap: anywhere; font: .84rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .evidence { margin: 6px 0; }
+    .run-summary { margin-bottom: 10px; }
+    .run-section { border-top: 1px solid #ddd; margin-top: 25px; }
+    .finding { margin: 10px 0 16px; }
+    .step { color: #555; white-space: nowrap; }
+    a { color: #175c91; }
+    a:hover { text-decoration: none; }
+    @media print {
+      body { max-width: none; margin: 0; padding: 0; color: #000; font-size: 10.5pt; }
+      a { color: inherit; }
+      h2, h3 { break-after: avoid; }
+      tr, li { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>五应用、多故障告警实验报告</h1>
+    <p class="meta">SREGym · CloudLab · 2026-10-06 · GPT-5 / Stratus · 每个条件一次正式运行</p>
+    <p class="lead"><strong>结果：</strong>1 到 5 个并发故障的五轮正式运行中，agent 均修复了指定的 Astronomy Shop <code>HighRequestErrorRate</code>。第 4 轮还做了一项不必要的 Product Catalog Service 修改。每个条件仅运行一次，因此这里记录的是观察结果，不能据此估计成功率或趋势。</p>
+  </header>
+
+  <main>
+    <section aria-labelledby="setup">
+      <h2 id="setup">实验设置</h2>
+      <p>每轮都重新部署 Astronomy Shop、Hotel Reservation、Social Network、Fleet Cast、Blueprint Hotel Reservation。主故障固定为 checkout 的 <code>PRODUCT_CATALOG_ADDR=product-catalog:8082</code>；正常端口是 8080。目标只包括 <code>HighRequestErrorRate{namespace="astronomy-shop",method="POST",name="/api/checkout"}</code>。</p>
+      <p>给 agent 的最后一句任务原文是：</p>
+      <blockquote>“Astronomy Shop has a firing HighRequestErrorRate alert for POST /api/checkout. Investigate and resolve this alert.”</blockquote>
+      <p>提示词没有透露端口故障、根因或额外故障。每轮在 agent 启动前确认主告警和每个新增告警都已 firing；checkout 持续失败、两个 cart 对照接口健康，且 Astronomy 主路径 Service endpoints 不变。预检失败的尝试不算 agent 失败。</p>
+      <div class="table-wrap">
+        <table>
+          <caption>固定的故障累加顺序</caption>
+          <thead><tr><th scope="col">序号</th><th scope="col">故障</th><th scope="col">独立 firing 告警</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Astronomy checkout 调用 Product Catalog 的端口改为 8082</td><td><code>HighRequestErrorRate</code>：<code>POST /api/checkout</code></td></tr>
+            <tr><td>2</td><td>Astronomy ad 新 Pod 镜像拉取失败；旧 Pod 和端点保留</td><td><code>PodStatusError</code></td></tr>
+            <tr><td>3</td><td>Hotel <code>recommendation</code> Service selector 错配，Service 无端点</td><td><code>ServiceEndpointDown</code></td></tr>
+            <tr><td>4</td><td>Social <code>user-service</code> 缩容到 0</td><td><code>DeploymentNotReady</code></td></tr>
+            <tr><td>5</td><td>Hotel <code>mongodb-rate</code> Pod 的内存 request 设为 <code>1Ti</code>，超过节点容量</td><td><code>PodSchedulingFailure</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section aria-labelledby="method">
+      <h2 id="method">方法与成功判定</h2>
+      <p>五轮使用同一台 CloudLab Kubernetes 节点、相同的五应用部署范围和 <code>full</code> workload profile。Astronomy 使用应用自带负载生成器；Hotel 与 Social 还启动 wrk2 负载（配置为 <code>rate=10</code>、<code>connections=10</code>、<code>duration=30</code>、<code>threads=2</code>）。每轮从清理后的集群开始，累加固定顺序的 1、2、3、4 或 5 个故障；预检通过后运行一次 GPT-5 Stratus mitigation agent，最多 20 轮，agent 超时设置为 1200 秒。网络访问模式为 <code>filtered</code>。</p>
+      <div class="table-wrap">
+        <table>
+          <caption>agent 启动前必须通过的检查</caption>
+          <thead><tr><th scope="col">阶段</th><th scope="col">具体门槛</th><th scope="col">目的</th></tr></thead>
+          <tbody>
+            <tr><td>干净基线</td><td>五应用和观测组件就绪；本实验涉及的告警家族在故障注入前没有无关 firing 告警。五份正式 CSV 的 <code>baseline_alerts</code> 均为 <code>[]</code>。</td><td>排除上一轮残留或部署失败。</td></tr>
+            <tr><td>主故障</td><td>checkout 地址确为 <code>product-catalog:8082</code>；<code>POST /api/checkout</code> 有实际请求、失败率至少 90%；目标告警 firing；两个 <code>/api/cart</code> 对照接口有请求且失败率不超过 5%；主故障 mitigation oracle 仍失败。</td><td>确认 agent 面对的是目标问题。</td></tr>
+            <tr><td>每个附加故障</td><td>同时验证 Kubernetes 症状和对应标签的 firing 告警：坏镜像 Pod、Hotel 无端点 Service、Social 零副本、Hotel 无法调度 Pod。</td><td>避免把“已调用注入器”误认为“噪声已生效”。</td></tr>
+            <tr><td>非干扰检查</td><td>Astronomy 主路径和 ad 的 Service endpoints 不变；checkout/cart 失败行为不变；每个接口请求率至少 0.01 rps，且至少为前一快照的 20%；主故障 oracle 保持失败。第 5 轮重跑前增加 90 秒内两次、间隔 5 秒的通过采样，数值门槛未变。</td><td>确认额外故障没有替代或掩盖 checkout 故障。</td></tr>
+            <tr><td>工具连接</td><td>启动 agent 前检查其可访问 kubectl、Jaeger 与 Prometheus MCP 路由。</td><td>把观测工具故障与 agent 能力分开。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>正式成功判定只针对指定的 <code>HighRequestErrorRate</code> 及 checkout 端口 mitigation oracle；其它告警允许继续 firing。报告另行记录 agent 的多余修改、是否主动提交，以及它自己做过哪些修复后验证。注入或预检失败的尝试不会启动 agent，不能算 agent 失败。各轮结束后按相反顺序恢复故障、删除应用命名空间，再开始下一轮。</p>
+    </section>
+
+    <section aria-labelledby="results">
+      <h2 id="results">五轮结果</h2>
+      <div class="table-wrap">
+        <table>
+          <caption>正式 agent 结果：五轮均预检通过、目标告警恢复</caption>
+          <thead><tr><th scope="col">故障数</th><th scope="col">TTM</th><th scope="col">提交方式</th><th scope="col">Agent 修改</th><th scope="col">判定</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>413.1 s</td><td>20 轮上限自动提交</td><td>checkout 地址改回 8080</td><td>目标恢复；无 agent 自己的修复后告警查询</td></tr>
+            <tr><td>2</td><td>332.0 s</td><td>主动提交</td><td>checkout 地址改回 8080</td><td>目标恢复；查询目标告警为空</td></tr>
+            <tr><td>3</td><td>350.3 s</td><td>20 轮上限自动提交</td><td>checkout 地址改回 8080</td><td>目标恢复；两次环境变量核查命令失败</td></tr>
+            <tr><td>4</td><td>382.6 s</td><td>20 轮上限自动提交</td><td>checkout 地址改回 8080；额外修改 Product Catalog Service</td><td>目标恢复；存在多余修改</td></tr>
+            <tr><td>5</td><td>345.3 s</td><td>主动提交</td><td>只将 checkout 地址改回 8080</td><td>目标恢复；查询告警为空</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <caption>agent 启动前的最后一份流量快照；所有行的两个 cart 接口失败率均为 0</caption>
+          <thead><tr><th scope="col">故障数</th><th scope="col">同时确认 firing 的告警</th><th scope="col">Checkout rps / 失败率</th><th scope="col">GET cart rps</th><th scope="col">POST cart rps</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>目标 <code>HighRequestErrorRate</code></td><td>0.0381 / 98.5%</td><td>0.0469</td><td>0.0571</td></tr>
+            <tr><td>2</td><td>再加 <code>PodStatusError</code></td><td>0.0661 / 约 100%</td><td>0.0571</td><td>0.2190</td></tr>
+            <tr><td>3</td><td>再加 <code>ServiceEndpointDown</code></td><td>0.0381 / 100%</td><td>0.0571</td><td>0.1714</td></tr>
+            <tr><td>4</td><td>再加 <code>DeploymentNotReady</code></td><td>0.0345 / 约 100%</td><td>0.0381</td><td>0.0762</td></tr>
+            <tr><td>5</td><td>再加 <code>PodSchedulingFailure</code></td><td>0.0190 / 100%</td><td>0.0476</td><td>0.0476</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">告警按行累加；正式 CSV 的 <code>fault_preflight_evidence.steps</code> 保留每一次注入后的快照和附加告警标签。Prometheus 对失败和总请求分别计算 <code>rate</code>，少数原始失败率略高于 100%，表中写成“约 100%”。TTM、<code>Mitigation.success=True</code>、<code>fault_preflight=passed</code> 均来自正式结果 CSV；不能用 agent 的自述替代这些判定。</p>
+    </section>
+
+    <section aria-labelledby="timelines">
+      <h2 id="timelines">每轮关键时间线</h2>
+      <p class="note">下列编号是 agent 轨迹中的步骤号，按调查顺序排列；不是分钟时间戳。</p>
+
+      <div class="run-section">
+      <h3>第 1 轮 · 1 个故障 · 413.1 秒</h3>
+      <p class="run-summary">只有 checkout 端口故障；预检确认目标告警 firing、checkout 失败率 98.5%、cart 对照正常。该轮是后续噪声轮次的参照。</p>
+      <ol>
+        <li><span class="step">#3–12</span> Agent 先查服务、依赖图、checkout/frontend 的 Jaeger trace 与 Prometheus 指标，没有收到端口根因提示。</li>
+        <li><span class="step">#13–18</span> 检查 Pods、日志、Service 与 endpoints。<code>kubectl get endpoints -n astronomy-shop checkout cart product-catalog</code> 显示 Product Catalog 仍有 8080 端点，排除了“Service 没有后端”这一解释。<pre class="evidence">checkout          10.244.149.120:8080
+cart              10.244.149.19:8080
+product-catalog   10.244.149.60:8080</pre></li>
+        <li><span class="step">#19–21</span> 对比三个 Deployment；<code>kubectl describe deploy/checkout</code> 显示错误地址：<pre class="evidence">PRODUCT_CATALOG_ADDR: product-catalog:8082</pre></li>
+        <li><span class="step">#22</span> 执行 <code>kubectl set env deploy/checkout -n astronomy-shop PRODUCT_CATALOG_ADDR=product-catalog:8080</code>，工具返回环境变量已更新。</li>
+        <li><span class="step">#23</span> 到达 20 轮上限后由驱动自动提交。轨迹中没有 agent 自己的修复后告警查询；外部结果记录 <code>Mitigation.success=True</code>、TTM 413.1 秒。</li>
+      </ol>
+      <p class="finding"><strong>本轮观察：</strong>agent 花较多轮次定位配置，最终只改 checkout；成功依据主要是外部判定。</p>
+      </div>
+
+      <div class="run-section">
+      <h3>第 2 轮 · 加入 ad 镜像故障 · 332.0 秒</h3>
+      <p class="run-summary">预检同时确认目标告警和新 ad Pod 的 <code>PodStatusError</code> firing；旧 ad Pod 仍 Ready，checkout/cart 行为及端点未被改变。</p>
+      <ol>
+        <li><span class="step">#3</span> Agent 的 <code>kubectl get pods -n astronomy-shop</code> 能看到明显的 ad 噪声，但没有尝试修复它：<pre class="evidence">ad-648954f6b-8f65w   0/1   ImagePullBackOff
+ad-78446fd77f-jdr8l  1/1   Running</pre></li>
+        <li><span class="step">#4–7</span> checkout trace 给出 Product Catalog 的连接超时；随后检查 Service 和 Deployment，看到 checkout 地址仍为 8082，而 Product Catalog 使用 8080。<pre class="evidence">connection error: dial tcp 10.96.229.179:8082: i/o timeout
+PRODUCT_CATALOG_ADDR: product-catalog:8082</pre></li>
+        <li><span class="step">#8–10</span> 把 checkout 地址改回 <code>product-catalog:8080</code>，等待并确认 <code>deployment "checkout" successfully rolled out</code>。</li>
+        <li><span class="step">#11–15</span> 检查新 Pod 和修复后的 trace；采样 trace 中可见 checkout 的 HTTP 200，未再出现上述连接错误。</li>
+        <li><span class="step">#16–19</span> 查询告警、等待告警计算窗口，并对精确目标标签再次查询，结果为空向量，然后主动提交。<pre class="evidence">sum by (method,name,namespace,alertname,alertstate)
+  (ALERTS{alertname="HighRequestErrorRate", namespace="astronomy-shop",
+          method="POST", name="/api/checkout"})
+→ result: []</pre></li>
+      </ol>
+      <p class="finding"><strong>本轮观察：</strong>agent 看到了 ad 错误 Pod，但调查和修改都集中在 checkout；独立 ad 告警未被要求清除。</p>
+      </div>
+
+      <div class="run-section">
+      <h3>第 3 轮 · 加入 Hotel Service 无端点 · 350.3 秒</h3>
+      <p class="run-summary">Host 预检确认 Hotel <code>recommendation</code> 有 Ready Pod，但 Service selector 错配、没有 endpoints，<code>ServiceEndpointDown</code> firing；Astronomy 的目标和 ad 告警也仍 firing。</p>
+      <ol>
+        <li><span class="step">#3–5</span> Agent 查看 Astronomy Pods 和 checkout trace；新 ad Pod 为 <code>ImagePullBackOff</code>，旧 ad Pod Ready。轨迹中没有去 Hotel 查询 selector。</li>
+        <li><span class="step">#6–9</span> 查询 Astronomy Service、checkout/Product Catalog Deployment 与 checkout 日志。<code>describe deploy checkout</code> 显示 <code>PRODUCT_CATALOG_ADDR: product-catalog:8082</code>。</li>
+        <li><span class="step">#10–13</span> 更新 checkout 地址到 8080，等待并看到新 checkout Pod Ready；没有修改 Hotel Service。</li>
+        <li><span class="step">#14–16</span> 两次尝试在 Pod 内运行 <code>printenv</code>，一次因管道命令受限、一次因容器中命令不存在而失败；随后 <code>kubectl describe deploy checkout</code> 确认新配置。<pre class="evidence">#14 Command Rejected (ValueError): Pipe commands are forbidden
+#15 command terminated with exit code 127
+#16 PRODUCT_CATALOG_ADDR: product-catalog:8080</pre></li>
+        <li><span class="step">#17–23</span> 继续查 checkout/frontend-proxy trace 与错误率查询。该指标查询返回空向量，但不是针对目标 <code>ALERTS</code> 的直接查询；达到 20 轮上限自动提交，外部判定目标恢复。</li>
+      </ol>
+      <p class="finding"><strong>本轮观察：</strong>Hotel 的无端点告警未把 agent 引向其它应用；修复后验证过程有工具命令失败，成功结论以外部目标判定为准。</p>
+      </div>
+
+      <div class="run-section">
+      <h3>第 4 轮 · 加入 Social Deployment 缺副本 · 382.6 秒</h3>
+      <p class="run-summary">预检已确认前两个噪声告警，加上 Social <code>user-service</code> 的 0 个可用副本与 <code>DeploymentNotReady</code> firing。checkout 仍约 100% 失败，两个 cart 接口仍无失败。</p>
+      <ol>
+        <li><span class="step">#3–6</span> Agent 查询服务、依赖图、checkout trace 和 Deployment YAML；在 checkout 环境变量中发现 <code>product-catalog:8082</code>。</li>
+        <li><span class="step">#7–9</span> 先把 checkout 地址改回 8080，随后 <code>kubectl rollout status deployment/checkout</code> 返回 <code>successfully rolled out</code>。</li>
+        <li><span class="step">#10–18</span> 多次查看 checkout trace、Pod、Product Catalog Service/Deployment 与日志；查询窗口中仍出现含 500 的 trace。轨迹不足以证明这些失败一定来自新 rollout 后的请求。</li>
+        <li><span class="step">#19–20</span> 额外执行 <code>kubectl patch svc product-catalog</code>；工具返回 <code>service/product-catalog patched</code>，随后 Service YAML 出现第二个端口：<pre class="evidence">ports:
+- name: tcp-service
+  port: 8080
+  targetPort: 8080
+- name: grpc
+  port: 8082
+  targetPort: 8080</pre></li>
+        <li><span class="step">#21–23</span> 再查 trace 和 Product Catalog Pod，然后达到 20 轮上限自动提交；外部判定目标恢复。</li>
+      </ol>
+      <p class="finding"><strong>本轮观察：</strong>额外的 8082 Service 端口属于多余改动。第 1、2、3、5 轮都只修 checkout 地址便恢复目标，因此不能把第 4 轮成功归功于此补丁；目前的目标告警判定也不会对这种改动扣分。</p>
+      </div>
+
+      <div class="run-section">
+      <h3>第 5 轮 · 加入 Hotel Pod 调度失败 · 345.3 秒</h3>
+      <p class="run-summary">预检确认五个故障均有真实症状和 firing 告警：<code>HighRequestErrorRate</code>、<code>PodStatusError</code>、<code>ServiceEndpointDown</code>、<code>DeploymentNotReady</code>、<code>PodSchedulingFailure</code>。最后一个告警对应的 <code>mongodb-rate</code> Pod 为 <code>PodScheduled=False</code>、原因 <code>Unschedulable</code>。最后快照中 checkout 为 0.0190 rps、失败率 100%；两个 cart 接口各约 0.0476 rps，失败率 0。</p>
+      <ol>
+        <li><span class="step">#3–6</span> Agent 的 Pod 列表包括 <code>ImagePullBackOff</code> 的 ad 新 Pod 和 Ready 的旧 Pod，但它继续调查 checkout。checkout trace 显示订单准备失败及到 Product Catalog 8082 的连接超时：<pre class="evidence">failed to prepare order: failed to get product
+connection error: dial tcp 10.103.170.21:8082: i/o timeout</pre></li>
+        <li><span class="step">#7–9</span> 对照 Product Catalog Service 与 checkout Deployment；前者提供 8080，后者的 <code>PRODUCT_CATALOG_ADDR</code> 是 <code>product-catalog:8082</code>。</li>
+        <li><span class="step">#10–14</span> 只修改 checkout 地址为 <code>product-catalog:8080</code>；随后 rollout 成功，查询新 Pod 环境变量也返回正确地址。<pre class="evidence">deployment "checkout" successfully rolled out
+PRODUCT_CATALOG_ADDR=product-catalog:8080</pre></li>
+        <li><span class="step">#15–20</span> 等待后重新查 trace；采样中出现 checkout HTTP 200，且未再见 Product Catalog 8082 连接错误。没有执行 Hotel 或 Social 的修复命令。</li>
+        <li><span class="step">#21–22</span> <code>ALERTS{alertname="HighRequestErrorRate"}</code> 查询返回空向量，agent 主动提交；外部结果记录 <code>Mitigation.success=True</code>、TTM 345.3 秒。<pre class="evidence">ALERTS{alertname="HighRequestErrorRate"} → result: []</pre></li>
+      </ol>
+      <p class="finding"><strong>本轮观察：</strong>五种同时 firing 的告警没有导致 agent 修改其它服务；它修复了指定目标并自己查询了告警清除情况。</p>
+      </div>
+    </section>
+
+    <section aria-labelledby="excluded">
+      <h2 id="excluded">未计入正式结果的尝试</h2>
+      <p>下列尝试用于调通五应用环境和预检，未进入上表五轮有效结果。其中预检失败的尝试没有启动 agent；已有 agent 进程但工具连接或提交不完整的尝试也没有可比较的 mitigation 结果。</p>
+      <div class="table-wrap">
+        <table>
+          <caption>按远端结果目录标识的排除记录</caption>
+          <thead><tr><th scope="col">目录 / 条件</th><th scope="col">记录到的停止原因</th><th scope="col">如何处理</th></tr></thead>
+          <tbody>
+            <tr><td><code>1005_1803</code> / 1</td><td>预检通过后，agent 的 Jaeger MCP 请求收到 <code>502 Bad Gateway</code>；driver 没有有效提交。</td><td>排除工具连接故障。</td></tr>
+            <tr><td><code>1005_1833</code> / 1</td><td>注入阶段 Prometheus alert 查询报 <code>no endpoints available for service "prometheus-server"</code>。</td><td>agent 未启动。</td></tr>
+            <tr><td><code>1005_1848</code>、<code>1005_2125</code> / 1</td><td>结果标记 <code>run_status=incomplete</code>、<code>no_submission</code>；没有可用的正式判定。</td><td>排除，不解释为 agent 修复失败。</td></tr>
+            <tr><td><code>1005_2253</code> / 3</td><td>基线已有 Hotel 与 Social 的 wrk2 Job <code>FailedPodsDetected</code> 告警。</td><td>拒绝受污染基线。</td></tr>
+            <tr><td><code>1005_2317</code>、<code>1005_2338</code> / 3</td><td>分别为 ad 流量预检超时、ad 注入后 checkout/cart 非干扰门槛未通过。</td><td>恢复故障并重建环境。</td></tr>
+            <tr><td><code>1006_1306</code> / 5</td><td>ad 注入后，checkout 两分钟请求率从约 0.0379 暂降到 0.0095 rps，低于 0.01 rps 门槛；失败率仍约 100%，cart 正常。</td><td>agent 未启动；改为在 90 秒内要求连续两次通过原门槛，清理后在 <code>1006_1329</code> 重跑。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">远端 <code>phases_attempt1.jsonl</code> 记录注入与清理阶段错误；正式 CSV 只取本报告“记录位置”列出的五个目录。</p>
+    </section>
+
+    <section aria-labelledby="limits">
+      <h2 id="limits">分析与判读边界</h2>
+      <p><strong>观察到的行为：</strong>五轮有效运行均修复了指定 checkout 告警，TTM 在 332.0–413.1 秒之间，没有随故障数单调增加。第 1、2、3、5 轮只改 checkout；第 4 轮虽然成功，还额外改了 Product Catalog Service。Agent 在多轮 Pod 列表中看到 ad 错误 Pod，却没有将它当成修复目标；Hotel 和 Social 的故障也未被修复。</p>
+      <ul>
+        <li>每个故障数只有一次有效运行，固定顺序也没有随机化。五次成功说明这组具体条件下未观察到目标修复失败，不能估计总体成功率或证明增加故障没有影响。</li>
+        <li>agent 提示词明确给出 Astronomy Shop、<code>HighRequestErrorRate</code> 和 <code>POST /api/checkout</code>，这有助于限定调查范围；本实验不能单独衡量在没有明确目标时的多告警分诊能力。</li>
+        <li>checkout 预检请求率约 0.019–0.066 rps，低流量下两分钟 <code>rate</code> 波动明显。第 5 轮采用连续两次通过采样，而前四轮是单次快照；虽然数值门槛相同，预检流程并非完全一致。</li>
+        <li>Blueprint Hotel Reservation 已部署，但此版本 workload 方法为 no-op，没有增加请求流量。第 2 轮还出现与任务无关的 TiDB 误报告警，规则在第 3 轮前修正；这些条件限制了轮间比较。</li>
+        <li>成功指标只要求目标告警和主故障 oracle 恢复，不惩罚多余修改。第 4 轮说明应另行审查变更范围与副作用。</li>
+      </ul>
+      <p><strong>环境与清理：</strong>为了让五应用共存，CloudLab 节点根分区从约 64 GiB 扩至约 216 GiB，kubelet <code>maxPods</code> 从 110 调至 200；这两项宿主机配置仍保留。正式实验结束后，五个应用命名空间均已删除，节点为 Ready、根分区剩余约 163 GiB。</p>
+    </section>
+
+    <section aria-labelledby="sources">
+      <h2 id="sources">记录位置</h2>
+      <p>本地五份 CSV 保留了 <code>fault_preflight_evidence.steps</code>、<code>TTM</code>、<code>Mitigation.success</code> 与阶段状态；完整 agent 轨迹留在 CloudLab。与本实验有关的文档包括<a href="multiapp-checkout-alert-ladder-2026-10-06.md">文字记录</a>和<a href="../agents/multiapp-checkout-alert-ladder-design.md">设计及非干扰门槛</a>。</p>
+      <div class="table-wrap">
+        <table>
+          <caption>正式运行数据与轨迹索引</caption>
+          <thead><tr><th scope="col">轮次</th><th scope="col">本地 CSV</th><th scope="col">CloudLab 结果目录</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td><a href="../../results/multiapp-checkout-alert-ladder-2026-10-06/multiapp_checkout_alert_1_stratus_results.csv">结果 CSV</a></td><td><code>1005_2147/stratus/multiapp_checkout_alert_1/</code></td></tr>
+            <tr><td>2</td><td><a href="../../results/multiapp-checkout-alert-ladder-2026-10-06/multiapp_checkout_alert_2_stratus_results.csv">结果 CSV</a></td><td><code>1005_2226/stratus/multiapp_checkout_alert_2/</code></td></tr>
+            <tr><td>3</td><td><a href="../../results/multiapp-checkout-alert-ladder-2026-10-06/multiapp_checkout_alert_3_stratus_results.csv">结果 CSV</a></td><td><code>1006_1117/stratus/multiapp_checkout_alert_3/</code></td></tr>
+            <tr><td>4</td><td><a href="../../results/multiapp-checkout-alert-ladder-2026-10-06/multiapp_checkout_alert_4_stratus_results.csv">结果 CSV</a></td><td><code>1006_1147/stratus/multiapp_checkout_alert_4/</code></td></tr>
+            <tr><td>5</td><td><a href="../../results/multiapp-checkout-alert-ladder-2026-10-06/multiapp_checkout_alert_5_stratus_results.csv">结果 CSV</a></td><td><code>1006_1329/stratus/multiapp_checkout_alert_5/</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">CloudLab 根目录：<code>jackj@ms1008.utah.cloudlab.us:/users/jackj/SREGym-checkout-alert-test-20261003/results/</code>。每轮目录下的 <code>run_1/trajectory.json</code> 包含本报告标注的 agent 步骤；<code>phases_attempt1.jsonl</code> 包含预检、注入、评估与清理阶段。第 5 轮被排除的首次预检记录在 <code>1006_1306/stratus/multiapp_checkout_alert_5/phases_attempt1.jsonl</code>。本地 <code>results/</code> 按仓库设置忽略，不会随版本控制自动分享。</p>
+      <p>正式运行的命令形式如下，其中 <code>N</code> 依次为 1 到 5；各轮需先清理上一轮资源，不能在同一有残留状态的集群直接连跑：</p>
+      <pre>SREGYM_AGENT_IMAGE=sregym-agent-base:latest \
+  .venv/bin/python main.py --problem multiapp_checkout_alert_N \
+  --stages mitigation --profile full --agent stratus --model gpt-5 \
+  --agent-timeout 1200</pre>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+  <title>Astronomy Shop 告警实验：六轮调试复盘</title>
+  <style>
+    :root{color-scheme:light;--bg:#f4f6f5;--paper:#fff;--ink:#14272c;--muted:#52666b;--line:#d8e1df;--teal:#087f78;--teal-soft:#e3f4f1;--amber:#a46112;--amber-soft:#fff1dc;--red:#b24343;--red-soft:#fbecec;--blue:#285c8c;--blue-soft:#e9f2fc}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.64 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+    a{color:var(--blue);overflow-wrap:anywhere}a:hover{text-decoration-thickness:2px}code,pre,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}code{font-size:.9em;overflow-wrap:anywhere}h1,h2,h3,p{margin-top:0}h1,h2,h3{line-height:1.3}h1{font-size:clamp(29px,4vw,47px);letter-spacing:-.035em;margin-bottom:13px}h2{font-size:clamp(22px,2.3vw,28px);margin-bottom:11px}h3{font-size:17px;margin-bottom:7px}p{margin-bottom:10px}
+    .shell{max-width:1250px;margin:auto;padding:0 28px}.hero{background:#102e34;color:#f4fbfa;border-bottom:5px solid #16b5a6}.hero .shell{padding-top:49px;padding-bottom:39px}.eyebrow{font:700 11px/1.4 ui-monospace,monospace;letter-spacing:.18em;text-transform:uppercase;color:#7fdbd0;margin-bottom:12px}.hero p{max-width:78ch;color:#d6e6e4;font-size:17px}.hero code{color:#a9eee4}.hero-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}.chip{display:inline-flex;align-items:center;border:1px solid #537079;border-radius:999px;padding:5px 10px;font-size:12px;color:#e0efec}
+    main{padding-top:30px;padding-bottom:45px}section{scroll-margin-top:82px}.section-head{display:flex;align-items:baseline;justify-content:space-between;gap:15px;margin:35px 0 12px}.section-head p{margin:0;color:var(--muted);font-size:13px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.card,.panel,.run{background:var(--paper);border:1px solid var(--line);box-shadow:0 2px 12px #16343a08}.card{padding:18px;border-radius:9px;min-height:139px}.card .label{font-size:12px;color:var(--muted);font-weight:700}.card .value{font-size:30px;font-weight:800;line-height:1.2;margin:8px 0 5px;letter-spacing:-.04em}.card .caption{font-size:12px;color:var(--muted)}.green{color:var(--teal)}.amber{color:var(--amber)}.red{color:var(--red)}.panel{border-radius:9px;padding:23px;margin:14px 0}.panel p:last-child{margin-bottom:0}.intro{display:grid;grid-template-columns:1.1fr .9fr;gap:14px}.route{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:19px 0 13px}.node{border:1px solid #9bb4b3;border-radius:5px;background:#f6fbfa;padding:8px 12px;font-weight:700}.node.bad{border-color:#d78982;background:var(--red-soft)}.node.noise{border-color:#d5a768;background:var(--amber-soft)}.arrow{color:var(--muted);font-size:21px}.callout{border-left:4px solid var(--teal);padding:10px 13px;background:var(--teal-soft);font-size:13px}.callout.caution{border-left-color:var(--amber);background:var(--amber-soft)}
+    .table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;min-width:760px}th,td{border-bottom:1px solid var(--line);padding:10px 9px;text-align:left;vertical-align:top}th{background:#edf3f1;color:#28434a;font-size:12px}tbody tr:last-child td{border-bottom:0}tbody tr:hover{background:#f8fbfa}.tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:750;white-space:nowrap}.tag.control{background:var(--blue-soft);color:var(--blue)}.tag.noise{background:var(--amber-soft);color:var(--amber)}.tag.pass{background:var(--teal-soft);color:#07675f}.tag.side{background:var(--red-soft);color:var(--red)}.note{font-size:12px;color:var(--muted)}.small{font-size:13px}.right{text-align:right}
+    .bar-chart{display:grid;gap:10px;margin-top:18px}.bar-row{display:grid;grid-template-columns:115px minmax(0,1fr) 72px;gap:12px;align-items:center;font-size:13px}.bar-label{white-space:nowrap}.bar-track{height:16px;border-radius:999px;background:repeating-linear-gradient(90deg,#edf1f0 0,#edf1f0 calc(25% - 1px),#d4dfdc calc(25% - 1px),#d4dfdc 25%);overflow:hidden}.bar-fill{display:block;height:100%;border-radius:999px;background:#477ba5}.bar-fill.noise{background:#d69645}.bar-value{font-variant-numeric:tabular-nums;text-align:right;font-weight:700}.axis{display:flex;justify-content:space-between;padding:4px 84px 0 127px;color:var(--muted);font-size:11px}.pair-deltas{display:flex;flex-wrap:wrap;gap:9px;margin-top:19px}.delta{background:#f2f6f5;border:1px solid var(--line);padding:5px 9px;border-radius:5px;font-size:12px}
+    .toolbar{position:sticky;top:0;z-index:4;display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#f4f6f5f5;backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:7px;padding:9px;margin:24px 0 13px}.toolbar label{font-size:12px;font-weight:700;color:var(--muted)}.toolbar select,.toolbar input{font:inherit;border:1px solid #9bb0b1;background:white;color:var(--ink);border-radius:4px;padding:6px 9px}.toolbar input{flex:1;min-width:180px}.toolbar select{min-width:155px}.toolbar .count{font-size:12px;color:var(--muted)}.run{border-radius:10px;margin:16px 0;padding:23px;scroll-margin-top:84px}.run-header{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:10px;border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:14px}.run-header h3{font-size:21px;margin:0}.run-lede{color:#365158}.timeline{margin:17px 0 0 10px;border-left:2px solid #bdcecc;padding-left:22px}.event{position:relative;margin:0 0 18px}.event:last-child{margin-bottom:0}.event:before{content:"";position:absolute;left:-29px;top:5px;width:11px;height:11px;border:2px solid #87aaa7;background:white;border-radius:50%}.event.fix:before{border-color:var(--teal);background:var(--teal)}.event.risk:before{border-color:var(--red);background:var(--red)}.event .step{font:700 11px ui-monospace,monospace;color:var(--muted);letter-spacing:.04em}.event h4{font-size:15px;margin:3px 0 4px}.event p{margin:0}.quote{margin:8px 0 0;border-left:3px solid #a7c3bf;padding:7px 10px;background:#f3f8f7;font-size:12px;color:#335058;overflow-wrap:anywhere}.quote.risk{border-left-color:#da9b95;background:#fff6f4}.run-foot{border-top:1px solid var(--line);padding-top:12px;margin-top:18px;font-size:12px;color:var(--muted)}.run-foot a{font-weight:700}
+    .footnote{border-top:1px solid var(--line);padding-top:17px;margin-top:28px;color:var(--muted);font-size:12px}.footnote ul{padding-left:20px}.footnote li{margin:5px 0}[hidden]{display:none!important}
+    @media(max-width:900px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.intro{grid-template-columns:1fr}}
+    @media(max-width:620px){.shell{padding-left:15px;padding-right:15px}.hero .shell{padding-top:34px;padding-bottom:27px}.grid{grid-template-columns:1fr 1fr}.card{min-height:122px;padding:13px}.card .value{font-size:23px}.panel,.run{padding:16px}.bar-row{grid-template-columns:83px minmax(0,1fr) 63px;gap:7px;font-size:12px}.axis{padding-left:90px;padding-right:70px}.section-head{display:block}.toolbar{position:static}}
+    @media print{body{background:white}.hero{background:white;color:var(--ink);border-color:var(--teal)}.hero p,.hero code{color:var(--ink)}.eyebrow{color:var(--teal)}.chip{color:var(--ink);border-color:var(--line)}.toolbar{display:none}.run,.panel,.card{box-shadow:none;break-inside:avoid}a{color:var(--blue)}}
+  </style>
+</head>
+<body>
+<header class="hero"><div class="shell">
+  <div class="eyebrow">SREGym · Astronomy Shop · GPT-5 · 调试复盘</div>
+  <h1>六轮告警驱动修复：<br>agent 如何处理 checkout 端口故障</h1>
+  <p>同一个 <code>HighRequestErrorRate</code>，三轮只有主故障，三轮另外加入 ad 镜像拉取故障。此页按原始轨迹复盘 agent 的调查路径，并把它的即时判断与 benchmark 最终验证分开。</p>
+  <div class="hero-meta"><span class="chip">2026-10-03 CloudLab 实验</span><span class="chip">control × 3 / noise × 3</span><span class="chip">仅 mitigation 阶段</span><span class="chip">目标：POST /api/checkout</span></div>
+</div></header>
+<main class="shell">
+  <section aria-labelledby="snapshot-title">
+    <div class="section-head"><h2 id="snapshot-title">先看结果</h2><p>下方“耗时”是 Stratus 输出 CSV 中的 agent 执行时间</p></div>
+    <div class="grid">
+      <div class="card"><div class="label">目标告警清除</div><div class="value green">6 / 6</div><div class="caption">两组各 3/3；均持续静默 120 秒</div></div>
+      <div class="card"><div class="label">主 mitigation oracle</div><div class="value green">6 / 6</div><div class="caption">Product Catalog 依赖检查通过</div></div>
+      <div class="card"><div class="label">agent 耗时中位数</div><div class="value">142 / 177<span style="font-size:14px"> 秒</span></div><div class="caption">对照 / 噪声；样本不足以断言差异</div></div>
+      <div class="card"><div class="label">记录到的额外修改</div><div class="value amber">1 / 3</div><div class="caption">噪声 1 给 Product Catalog Service 加了 8082 端口</div></div>
+    </div>
+  </section>
+
+  <section class="intro" aria-label="实验结构">
+    <div class="panel">
+      <h2>主故障与被指定的告警</h2>
+      <div class="route"><span class="node">POST /api/checkout</span><span class="arrow">→</span><span class="node">checkout</span><span class="arrow">→</span><span class="node bad">Product Catalog :8082 ✕</span></div>
+      <p>主故障把 checkout 的 <code>PRODUCT_CATALOG_ADDR</code> 设为 <code>product-catalog:8082</code>，而 Product Catalog Service 公开的是 <code>8080</code>。调用 <code>GetProduct</code> 超时，checkout 请求失败，触发指定的 <code>HighRequestErrorRate</code>。</p>
+      <div class="callout">agent 起始消息只给出 Astronomy Shop 中正在 firing 的 <code>HighRequestErrorRate</code>（<code>POST /api/checkout</code>），没有给出端口、环境变量或根因。</div>
+    </div>
+    <div class="panel">
+      <h2>独立噪声</h2>
+      <div class="route"><span class="node">ad 现有 Ready Pod</span><span class="arrow">＋</span><span class="node noise">新 Pod ImagePullBackOff</span></div>
+      <p>噪声组把 ad Deployment 的新镜像指向不存在的版本，使新 Pod 拉取失败并触发另一种告警 <code>PodStatusError</code>；旧的 Ready ad Pod 保持服务。噪声在 agent 启动前注入。</p>
+      <div class="callout caution">目标判定只匹配 <code>HighRequestErrorRate</code>、<code>method=POST</code>、<code>name=/api/checkout</code>。<code>PodStatusError</code> 不要求 agent 修复；三次噪声注入都通过了真实流量和端点不干扰检查。</div>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="comparison-title">
+    <h2 id="comparison-title">六轮总表</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>轮次</th><th>条件</th><th>目标告警</th><th>主 oracle</th><th class="right">agent 耗时</th><th>轨迹中的关键差异</th></tr></thead>
+      <tbody>
+        <tr><td><a href="#control-1">对照 1</a> <code>2011</code></td><td><span class="tag control">无噪声</span></td><td><span class="tag pass">通过</span></td><td><span class="tag pass">通过</span></td><td class="right">133.719 s</td><td>先见告警仍 firing，等待后查询为空，再提交。</td></tr>
+        <tr><td><a href="#noise-1">噪声 1</a> <code>2023</code></td><td><span class="tag noise">ad 镜像</span></td><td><span class="tag pass">通过</span></td><td><span class="tag pass">通过</span></td><td class="right">176.700 s</td><td><span class="tag side">额外修改</span> 修正地址后，又添加 8082 Service 端口。</td></tr>
+        <tr><td><a href="#control-2">对照 2</a> <code>2040</code></td><td><span class="tag control">无噪声</span></td><td><span class="tag pass">通过</span></td><td><span class="tag pass">通过</span></td><td class="right">141.653 s</td><td>修复后持续查看 trace；最终由 driver 验证。</td></tr>
+        <tr><td><a href="#noise-2">噪声 2</a> <code>2053</code></td><td><span class="tag noise">ad 镜像</span></td><td><span class="tag pass">通过</span></td><td><span class="tag pass">通过</span></td><td class="right">120.300 s</td><td>六轮最快；明确提交端口诊断。</td></tr>
+        <tr><td><a href="#control-3">对照 3</a> <code>2109</code></td><td><span class="tag control">无噪声</span></td><td><span class="tag pass">通过</span></td><td><span class="tag pass">通过</span></td><td class="right">155.396 s</td><td>检查了多条 frontend/checkout trace，再提交。</td></tr>
+        <tr><td><a href="#noise-3">噪声 3</a> <code>2121</code></td><td><span class="tag noise">ad 镜像</span></td><td><span class="tag pass">通过</span></td><td><span class="tag pass">通过</span></td><td class="right">214.881 s</td><td>最后一次 agent 查询时告警仍 firing；driver 后续等到清除。</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">所有六轮均为 <code>run_status=complete</code>、<code>Mitigation.success=True</code>。表中的目标告警通过来自 driver 的定向弱 oracle；agent 自己在轨迹中看到的状态可能更早。轨迹编号取完整目录名末尾四位。</p>
+  </section>
+
+  <section class="panel" aria-labelledby="time-title">
+    <h2 id="time-title">agent 执行时间</h2>
+    <p class="small">横条按 0–240 秒绘制。对照中位数 141.653 秒，噪声中位数 176.700 秒；逐对差值有正有负。</p>
+    <div class="bar-chart" role="img" aria-label="六轮 agent 执行时间。对照一 133.719 秒，噪声一 176.700 秒；对照二 141.653 秒，噪声二 120.300 秒；对照三 155.396 秒，噪声三 214.881 秒。">
+      <div class="bar-row"><span class="bar-label">对照 1</span><div class="bar-track"><span class="bar-fill" style="width:55.72%"></span></div><span class="bar-value">133.719</span></div>
+      <div class="bar-row"><span class="bar-label">噪声 1</span><div class="bar-track"><span class="bar-fill noise" style="width:73.63%"></span></div><span class="bar-value">176.700</span></div>
+      <div class="bar-row"><span class="bar-label">对照 2</span><div class="bar-track"><span class="bar-fill" style="width:59.02%"></span></div><span class="bar-value">141.653</span></div>
+      <div class="bar-row"><span class="bar-label">噪声 2</span><div class="bar-track"><span class="bar-fill noise" style="width:50.13%"></span></div><span class="bar-value">120.300</span></div>
+      <div class="bar-row"><span class="bar-label">对照 3</span><div class="bar-track"><span class="bar-fill" style="width:64.75%"></span></div><span class="bar-value">155.396</span></div>
+      <div class="bar-row"><span class="bar-label">噪声 3</span><div class="bar-track"><span class="bar-fill noise" style="width:89.53%"></span></div><span class="bar-value">214.881</span></div>
+    </div>
+    <div class="axis"><span>0</span><span>60</span><span>120</span><span>180</span><span>240 秒</span></div>
+    <div class="pair-deltas"><span class="delta">第 1 对：噪声 +42.981 s</span><span class="delta">第 2 对：噪声 −21.353 s</span><span class="delta">第 3 对：噪声 +59.485 s</span></div>
+    <p class="note">这里不使用 benchmark 的 mitigation-stage duration：对照组该值包含等待告警触发的时间，和噪声组阶段边界不同。每组只有三次，不能据此推断噪声造成稳定的速度变化。</p>
+  </section>
+
+  <section class="panel" aria-labelledby="isolation-title">
+    <h2 id="isolation-title">噪声是否改变了主故障？</h2>
+    <p>下表是<strong>agent 启动前</strong>的噪声 preflight，比较 ad 镜像变更前后实际请求。checkout 的失败比例都约为 100%，目标告警仍 firing；cart 的 <code>GET</code> 与 <code>POST</code> 失败比例均为 0，主路径与 ad Service 的端点集合在每轮注入前后相同。</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>噪声轮次</th><th>checkout 请求/s</th><th>checkout 失败比例</th><th>ad 请求/s</th><th>注入与清理</th></tr></thead>
+      <tbody>
+        <tr><td><a href="#noise-1">噪声 1</a></td><td>0.0476 → 0.0519</td><td>1.000 → 1.001</td><td>0.0656 → 0.1195</td><td><span class="tag pass">gate 通过</span> <span class="tag pass">清理确认</span></td></tr>
+        <tr><td><a href="#noise-2">噪声 2</a></td><td>0.0172 → 0.0381</td><td>1.001 → 1.000</td><td>0.0612 → 0.1079</td><td><span class="tag pass">gate 通过</span> <span class="tag pass">清理确认</span></td></tr>
+        <tr><td><a href="#noise-3">噪声 3</a></td><td>0.0190 → 0.0178</td><td>1.000 → 1.001</td><td>0.0674 → 0.1164</td><td><span class="tag pass">gate 通过</span> <span class="tag pass">清理确认</span></td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">比例略高于 1 是 Prometheus <code>rate()</code> 外推造成的数值现象。请求率本身波动，不应解读为噪声造成了 checkout 流量变化；关键是每轮的真实 checkout 流量持续存在、失败状态未被噪声解除、端点未变。</p>
+  </section>
+
+  <section aria-labelledby="timeline-title">
+    <div class="section-head"><h2 id="timeline-title">逐轮调查时间线</h2><p>按 ATIF <code>step_id</code> 排序；仅摘录影响判断的步骤</p></div>
+    <div class="toolbar"><label for="arm-filter">条件</label><select id="arm-filter"><option value="all">全部六轮</option><option value="control">只看对照</option><option value="noise">只看噪声</option></select><label for="step-search">搜索</label><input id="step-search" type="search" placeholder="例如 8082、ImagePullBackOff、告警"><span class="count" id="visible-count" role="status" aria-live="polite">显示 6 轮</span></div>
+
+    <article class="run" id="control-1" data-arm="control">
+      <div class="run-header"><h3>对照 1 · <code>1003_2011</code></h3><div><span class="tag control">无噪声</span> <span class="tag pass">目标通过</span></div></div>
+      <p class="run-lede">先从 checkout trace 找到 8082 超时；修复后告警尚未立刻消失，agent 等待并再次查询，最后提交。</p>
+      <div class="timeline">
+        <div class="event"><span class="step">S3–S6 · 定位</span><h4>trace 与配置对上了错误端口</h4><p>先查看 Pod，再抓 checkout trace，接着比较 Service 与 checkout Deployment。<code>GetProduct</code> 客户端 span 出现 <code>:8082: i/o timeout</code>。</p><div class="quote"><code>get_traces(checkout, 15)</code> → <code>ProductCatalogService/GetProduct</code>，dial tcp <code>:8082</code> 超时</div></div>
+        <div class="event fix"><span class="step">S7 · 修改</span><h4>恢复 checkout 依赖地址</h4><p><code>kubectl set env deployment/checkout -n astronomy-shop PRODUCT_CATALOG_ADDR=product-catalog:8080</code>；随后等待 rollout，并继续看 trace。</p></div>
+        <div class="event"><span class="step">S15–S19 · 验证与提交</span><h4>告警先仍 firing，后查询为空</h4><p>S15 的 <code>ALERTS</code> 查询仍看到目标 firing。等待 45 秒后，S17 的错误请求查询和 S18 的告警查询返回空结果，S19 提交端口根因。</p></div>
+      </div>
+      <p class="run-foot">agent 133.719 s。driver 随后确认目标告警 120 s 静默，主 oracle 通过。<a href="../../.scratch/astronomy-alert-noise/formal-runs/1003_2011/stratus/incorrect_port_assignment/run_1/trajectory.json">原始 trajectory.json</a> · <a href="../../.scratch/astronomy-alert-noise/formal-runs/1003_2011/stratus/incorrect_port_assignment/phases_attempt1.jsonl">阶段记录</a></p>
+    </article>
+
+    <article class="run" id="noise-1" data-arm="noise">
+      <div class="run-header"><h3>噪声 1 · <code>1003_2023</code></h3><div><span class="tag noise">ad 镜像</span> <span class="tag side">额外 Service 修改</span></div></div>
+      <p class="run-lede">agent 看见了 <code>ImagePullBackOff</code>，仍沿 checkout trace 找到端口问题。修正 checkout 后又加入 8082 Service 端口；这是本组六轮唯一记录到的额外修改。</p>
+      <div class="timeline">
+        <div class="event"><span class="step">注入前门槛</span><h4>主故障与噪声同时存在</h4><p>新 ad Pod 因错误镜像等待，旧 ad Pod Ready；<code>PodStatusError</code> 与 checkout 目标告警同时 firing。checkout 失败比例约 1.000，Service 端点未改变。</p></div>
+        <div class="event"><span class="step">S3–S8 · 定位</span><h4>Pod 列表包含坏 ad Pod，调查仍指向 checkout</h4><p>S5 的 Pod 列表显示新 ad Pod <code>ImagePullBackOff</code>。agent 随后查看 checkout/Product Catalog 的 Deployment 和 Service；checkout trace 显示拨号 <code>:8082</code> 超时。</p><div class="quote"><code>kubectl get pods -n astronomy-shop</code> → 一个 ad Pod Ready，另一个 <code>ImagePullBackOff</code></div></div>
+        <div class="event fix"><span class="step">S9 · 主修复</span><h4>把 checkout 改回 8080</h4><p><code>kubectl set env deploy/checkout -n astronomy-shop PRODUCT_CATALOG_ADDR=product-catalog:8080</code>。之后 agent 继续读 trace 和 checkout Pod 状态。</p></div>
+        <div class="event risk"><span class="step">S20–S22 · 额外修改</span><h4>环境变量复查失败后，增加 8082 Service 端口</h4><p>带管道的 <code>kubectl exec</code> 被工具拒绝；直接 <code>printenv</code> 返回 127。随后 agent 将 Product Catalog Service 新增 <code>port:8082 → targetPort:8080</code>。轨迹在此结束，没有该修改后的 agent 内部验证或提交步骤。</p><div class="quote risk"><code>kubectl patch svc product-catalog ... port 8082, targetPort 8080</code> → <code>service/product-catalog patched</code></div></div>
+      </div>
+      <p class="run-foot">agent 176.700 s。driver 的目标告警与主 oracle 后续均通过；不能把通过归因于这次多余 Service 修改。<a href="../../.scratch/astronomy-alert-noise/formal-runs/1003_2023/stratus/incorrect_port_assignment/run_1/trajectory.json">原始 trajectory.json</a> · <a href="../../.scratch/astronomy-alert-noise/formal-runs/1003_2023/stratus/incorrect_port_assignment/noise_evidence_attempt1.json">噪声证据</a></p>
+    </article>
+
+    <article class="run" id="control-2" data-arm="control">
+      <div class="run-header"><h3>对照 2 · <code>1003_2040</code></h3><div><span class="tag control">无噪声</span> <span class="tag pass">目标通过</span></div></div>
+      <p class="run-lede">多服务 trace 排查后直接修正 checkout；剩余轮次继续取 trace，未在保存的轨迹里提交最终文字。</p>
+      <div class="timeline">
+        <div class="event"><span class="step">S3–S7 · 定位</span><h4>跨 frontend、frontend-proxy、checkout 追踪失败</h4><p>S5 并行请求三个服务的 trace；checkout 的 Product Catalog 调用出现 <code>:8082: i/o timeout</code>。再读 Service 和 checkout Deployment。</p></div>
+        <div class="event fix"><span class="step">S8–S10 · 修改</span><h4>修正环境变量并等待 rollout</h4><p><code>kubectl set env deployment/checkout -n astronomy-shop PRODUCT_CATALOG_ADDR=product-catalog:8080</code>，等待后确认 Deployment rollout 完成。</p></div>
+        <div class="event"><span class="step">S11–S22 · 持续排查</span><h4>修复后 trace 仍含 8082 错误</h4><p>agent 反复检查 checkout 与 frontend 的短时间窗口 trace；S22 的结果仍包含 <code>:8082</code> 失败 span。该查询可能混入修复前的请求，仅凭它不能判定新请求仍失败，最终以 driver 对目标告警的持续静默检查为准。</p></div>
+      </div>
+      <p class="run-foot">agent 141.653 s；保存的 agent 轨迹没有 <code>f_submit_tool</code>，driver 后续验证通过。<a href="../../.scratch/astronomy-alert-noise/formal-runs/1003_2040/stratus/incorrect_port_assignment/run_1/trajectory.json">原始 trajectory.json</a> · <a href="../../.scratch/astronomy-alert-noise/formal-runs/1003_2040/stratus/incorrect_port_assignment/phases_attempt1.jsonl">阶段记录</a></p>
+    </article>
+
+    <article class="run" id="noise-2" data-arm="noise">
+      <div class="run-header"><h3>噪声 2 · <code>1003_2053</code></h3><div><span class="tag noise">ad 镜像</span> <span class="tag pass">目标通过</span></div></div>
+      <p class="run-lede">最短的一轮。agent 看到异常 ad Pod，但调查、修复和提交都围绕 checkout 端口。</p>
+      <div class="timeline">
+        <div class="event"><span class="step">注入前门槛</span><h4>噪声真实 firing，主故障仍在</h4><p>新 ad Pod <code>ImagePullBackOff</code>，旧 Pod Ready。checkout 失败比例约 1.001 → 1.000，目标告警持续 firing，端点集合相同。</p></div>
+        <div class="event"><span class="step">S3–S8 · 定位</span><h4>依赖图和 trace 指向 Product Catalog</h4><p>agent 取服务列表、checkout 操作与 trace、依赖图。S5 的 Pod 列表包含坏 ad Pod；随后对照 checkout Deployment 和 Product Catalog Service，找到 <code>:8082</code> 超时与 Service 的 8080 端口。</p></div>
+        <div class="event fix"><span class="step">S9 · 修改</span><h4>只改 checkout 的错误地址</h4><p><code>kubectl -n astronomy-shop set env deployment/checkout PRODUCT_CATALOG_ADDR=product-catalog:8080</code>。没有记录到 ad 或 Product Catalog Service 修改。</p></div>
+        <div class="event"><span class="step">S11–S19 · 验证与提交</span><h4>继续看 trace，然后提交端口诊断</h4><p>agent 检查 checkout 与 frontend trace、Pod 和 Deployment。S18 的请求指标查询为空结果，不能单独证明恢复；S19 提交了端口错误及修复说明。driver 再做目标告警持续静默检查。</p></div>
+      </div>
+      <p class="run-foot">agent 120.300 s，目标与主 oracle 通过。<a href="../../.scratch/astronomy-alert-noise/formal-runs/1003_2053/stratus/incorrect_port_assignment/run_1/trajectory.json">原始 trajectory.json</a> · <a href="../../.scratch/astronomy-alert-noise/formal-runs/1003_2053/stratus/incorrect_port_assignment/noise_evidence_attempt1.json">噪声证据</a></p>
+    </article>
+
+    <article class="run" id="control-3" data-arm="control">
+      <div class="run-header"><h3>对照 3 · <code>1003_2109</code></h3><div><span class="tag control">无噪声</span> <span class="tag pass">目标通过</span></div></div>
+      <p class="run-lede">从 checkout、frontend、frontend-proxy trace 切入，修复后扩大验证范围，最后提交。</p>
+      <div class="timeline">
+        <div class="event"><span class="step">S3–S7 · 定位</span><h4>定位 checkout → Product Catalog 的 8082 超时</h4><p>agent 查看服务和 checkout 操作，取三个服务的 trace，再读 checkout Deployment YAML 与 Product Catalog Service YAML。失败调用指向不存在的 8082 Service 端口。</p></div>
+        <div class="event fix"><span class="step">S8 · 修改</span><h4>checkout 地址回到 8080</h4><p><code>kubectl -n astronomy-shop set env deploy/checkout PRODUCT_CATALOG_ADDR=product-catalog:8080</code>，随后等待并确认 rollout。</p></div>
+        <div class="event"><span class="step">S10–S22 · 验证与提交</span><h4>持续查看链路，最后提交根因</h4><p>检查多轮 checkout、frontend 与 proxy trace，查看 checkout Pod/日志。S21 的 frontend 请求率指标为空；S22 提交端口故障诊断。通过结果来自 driver 后续 oracle，而非这条空指标本身。</p></div>
+      </div>
+      <p class="run-foot">agent 155.396 s，目标与主 oracle 通过。<a href="../../.scratch/astronomy-alert-noise/formal-runs/1003_2109/stratus/incorrect_port_assignment/run_1/trajectory.json">原始 trajectory.json</a> · <a href="../../.scratch/astronomy-alert-noise/formal-runs/1003_2109/stratus/incorrect_port_assignment/phases_attempt1.jsonl">阶段记录</a></p>
+    </article>
+
+    <article class="run" id="noise-3" data-arm="noise">
+      <div class="run-header"><h3>噪声 3 · <code>1003_2121</code></h3><div><span class="tag noise">ad 镜像</span> <span class="tag pass">目标通过</span></div></div>
+      <p class="run-lede">agent 最后一次自己查告警时仍是 firing；它继续等待，之后 driver 在恢复宽限期内确认告警清除。这轮最能体现“修复生效”和“告警解除”之间的时间差。</p>
+      <div class="timeline">
+        <div class="event"><span class="step">注入前门槛</span><h4>坏 ad Pod 与 checkout 故障并存</h4><p>新 ad Pod <code>ImagePullBackOff</code>，旧 Pod Ready。checkout 失败比例约 1.000 → 1.001，目标告警仍 firing，端点集合未改变。</p></div>
+        <div class="event"><span class="step">S3–S8 · 定位</span><h4>看见坏 ad Pod，仍追 checkout trace</h4><p>S5 的 Pod 列表包含异常 ad Pod；agent 对照 Service 和两个 Deployment。checkout 的 Product Catalog span 显示 <code>:8082: i/o timeout</code>。</p></div>
+        <div class="event fix"><span class="step">S9 · 修改</span><h4>只修 checkout 地址</h4><p><code>kubectl set env deployment/checkout -n astronomy-shop PRODUCT_CATALOG_ADDR=product-catalog:8080</code>，并等待 rollout。没有记录到 ad 修改。</p></div>
+        <div class="event"><span class="step">S12–S22 · 等待告警窗口</span><h4>agent 查询仍 firing；driver 后来确认清除</h4><p>多次短窗口 trace 仍包含 8082 错误，可能混入修复前的请求。S21 的 <code>ALERTS</code> 查询明确返回目标 firing；S22 等待 60 秒后轨迹结束，没有提交文字。driver 接着等待最多 4 分钟恢复，再要求 120 秒静默，最终通过。</p><div class="quote"><code>ALERTS{alertname="HighRequestErrorRate"}</code> → S21 仍 <code>firing</code></div></div>
+      </div>
+      <p class="run-foot">agent 214.881 s；driver 的通过不能写成 agent 在 S21 已观察到告警解除。<a href="../../.scratch/astronomy-alert-noise/formal-runs/1003_2121/stratus/incorrect_port_assignment/run_1/trajectory.json">原始 trajectory.json</a> · <a href="../../.scratch/astronomy-alert-noise/formal-runs/1003_2121/stratus/incorrect_port_assignment/noise_evidence_attempt1.json">噪声证据</a></p>
+    </article>
+  </section>
+
+  <section class="panel" aria-labelledby="takeaway-title">
+    <h2 id="takeaway-title">调试结论与边界</h2>
+    <p><strong>已观察到：</strong>六轮 agent 都自行把 checkout 依赖地址改回 <code>product-catalog:8080</code>；三轮有 ad 噪声时，agent 都在 Pod 列表中看见异常 Pod，但没有改动 ad。三轮噪声的主故障不干扰 gate 均通过。</p>
+    <p><strong>值得复查：</strong>噪声 1 在主修复后增加 8082 Service 端口。这是额外变更，不属于预期的最小修复；现有结果无法证明它是噪声导致的。噪声 3 在 agent 查询时告警仍 firing，driver 后续通过恢复宽限期与持续静默检查才给出成功。</p>
+    <p><strong>不能推断：</strong>三轮每组不足以估计噪声对成功率或耗时的因果影响，也不能把所有 agent 的提交文字或空指标结果当作最终验证。最终成功由定向弱 oracle 与 benchmark 主 oracle 共同支持。</p>
+  </section>
+
+  <footer class="footnote">
+    <p><strong>实验口径与来源</strong></p>
+    <ul>
+      <li>六轮按对照 1、噪声 1、对照 2、噪声 2、对照 3、噪声 3 顺序运行；Stratus mitigation 模型 <code>gpt-5</code>，judge <code>gpt-4o-mini</code>，每轮 agent timeout 1800 秒。</li>
+      <li>弱 oracle 在 agent 结束后定向匹配 <code>HighRequestErrorRate</code> / <code>POST</code> / <code>/api/checkout</code>，允许最多 240 秒恢复，再要求 120 秒不 firing。日志里的“no firing alerts in namespace”是通用文案；本实验的代码按目标标签过滤。</li>
+      <li>先前一轮用于校准告警等待时间，已中止且不计入六轮正式结果。正式结果汇总：<a href="astronomy-checkout-alert-gpt5-2026-10-03.md">实验 Markdown 报告</a>；<a href="../../.scratch/astronomy-alert-noise/formal-runs/summary.json">机器可读汇总</a>；<a href="../../.scratch/astronomy-alert-noise/formal-runs/oracle_verification.txt">oracle 日志摘录</a>。</li>
+      <li>时间线只保留关键步骤，<code>S</code> 编号可在各轮原始 <code>trajectory.json</code> 中核对。preflight 数据来自各轮 <code>noise_evidence_attempt1.json</code>。本页面可离线打开，无外部脚本或网络依赖。</li>
+    </ul>
+  </footer>
+</main>
+<script>
+  const runs=[...document.querySelectorAll('.run')];
+  const armFilter=document.getElementById('arm-filter');
+  const stepSearch=document.getElementById('step-search');
+  const visibleCount=document.getElementById('visible-count');
+  function updateRuns(){
+    const arm=armFilter.value;
+    const query=stepSearch.value.trim().toLocaleLowerCase();
+    let count=0;
+    for(const run of runs){
+      const show=(arm==='all'||run.dataset.arm===arm)&&(!query||run.textContent.toLocaleLowerCase().includes(query));
+      run.hidden=!show;
+      if(show)count++;
+    }
+    visibleCount.textContent=`显示 ${count} 轮`;
+  }
+  armFilter.addEventListener('change',updateRuns);
+  stepSearch.addEventListener('input',updateRuns);
+  window.addEventListener('hashchange',()=>{if(location.hash){armFilter.value='all';stepSearch.value='';updateRuns()}});
+</script>
+</body>
+</html>

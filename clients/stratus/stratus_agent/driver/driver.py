@@ -450,8 +450,6 @@ async def mitigation_task_main(diagnosis_summary):
 
     # oracle
     logger.info("setting up oracles")
-    cluster_state_oracle = ClusterStateOracle()
-    oracles = [cluster_state_oracle]
 
     # setting up workload oracle, need to interact with benchmark.
     logger.info("getting app info")
@@ -459,6 +457,10 @@ async def mitigation_task_main(diagnosis_summary):
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
     app_namespace = app_info["namespace"]
+    checkout_alert_experiment = app_info.get("target_alert") == {
+        "alertname": "HighRequestErrorRate", "method": "POST", "name": "/api/checkout",
+    }
+    oracles = [] if checkout_alert_experiment else [ClusterStateOracle()]
     # if app_name not in ["Social Network", "Hotel Reservation"]:
     #     logger.info("Current app does not support workload oracle")
     # else:
@@ -468,20 +470,36 @@ async def mitigation_task_main(diagnosis_summary):
     #     oracles.append(workload_oracle)
 
     logger.info(f"adding alert oracle for namespace [{app_namespace}]")
-    oracles.append(AlertOracle(app_namespace))
+    if checkout_alert_experiment:
+        target_alert_oracle = AlertOracle(app_namespace, match_labels={
+            "alertname": "HighRequestErrorRate", "method": "POST", "name": "/api/checkout",
+        }, recovery_timeout_seconds=240)
+        await asyncio.to_thread(target_alert_oracle.wait_for_firing)
+        oracles.append(target_alert_oracle)
+        mitigation_system_prompt = mitigation_agent_prompts["alert_system"]
+        mitigation_user_prompt = mitigation_agent_prompts["alert_user"].format(
+            max_step=mitigation_agent_max_step,
+            app_name=app_name,
+            app_description=app_description,
+            app_namespace=app_namespace,
+        )
+        mitigation_retry_prompt = mitigation_agent_prompts["alert_retry_user"]
+    else:
+        oracles.append(AlertOracle(app_namespace))
+        mitigation_system_prompt = mitigation_agent_prompts["system"]
+        mitigation_user_prompt = mitigation_agent_prompts["user"].format(
+            max_step=mitigation_agent_max_step,
+            faults_info=diagnosis_summary,
+            app_name=app_name,
+            app_description=app_description,
+            app_namespace=app_namespace,
+        )
+        mitigation_retry_prompt = mitigation_agent_prompts["retry_user"]
 
     # defining the first set of messages that all retry mode share
     first_run_initial_messages = [
-        SystemMessage(mitigation_agent_prompts["system"]),
-        HumanMessage(
-            mitigation_agent_prompts["user"].format(
-                max_step=mitigation_agent_max_step,
-                faults_info=diagnosis_summary,
-                app_name=app_name,
-                app_description=app_description,
-                app_namespace=app_namespace,
-            )
-        ),
+        SystemMessage(mitigation_system_prompt),
+        HumanMessage(mitigation_user_prompt),
     ]
     start_time = time.perf_counter()
     logger.info(f"running in retry mode: [{mitigation_agent_retry_mode}]")
@@ -620,17 +638,11 @@ async def mitigation_task_main(diagnosis_summary):
                 # we compose the retry prompts here.
                 last_run_summary = generate_run_summary(mitigation_agent_last_state, llm_summarization_prompt)
                 retry_run_initial_messages = [
-                    SystemMessage(mitigation_agent_prompts["system"]),
+                    SystemMessage(mitigation_system_prompt),
                     HumanMessage(
-                        mitigation_agent_prompts["user"].format(
-                            max_step=mitigation_agent_max_step,
-                            faults_info=diagnosis_summary,
-                            app_name=app_name,
-                            app_description=app_description,
-                            app_namespace=app_namespace,
-                        )
+                        mitigation_user_prompt
                         + "\n\n"
-                        + mitigation_agent_prompts["retry_user"].format(
+                        + mitigation_retry_prompt.format(
                             last_result=str(oracle_results),
                             reflection=last_run_summary,
                         )

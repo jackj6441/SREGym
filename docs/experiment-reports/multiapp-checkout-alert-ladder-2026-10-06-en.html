@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Alert-directed mitigation across five applications — SREGym report</title>
+  <style>
+    :root {
+      --ink: #17324f;
+      --blue: #2e6ea6;
+      --paper: #fff;
+      --wash: color-mix(in srgb, var(--blue) 11%, var(--paper));
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { max-width: 1120px; margin: 0 auto; padding: 0 28px 60px; color: var(--ink); background: var(--paper); font: 16px/1.6 "Avenir Next", "Segoe UI", sans-serif; }
+    header { padding: 44px 0 24px; border-bottom: 2px solid var(--ink); }
+    h1, h2, h3 { font-family: "Iowan Old Style", Georgia, serif; line-height: 1.22; }
+    h1 { max-width: 820px; margin: 12px 0; font-size: clamp(2rem, 4vw, 3.1rem); letter-spacing: -.02em; }
+    h2 { margin: 48px 0 18px; padding-bottom: 8px; font-size: 1.65rem; border-bottom: 1px solid var(--blue); }
+    h3 { margin: 32px 0 12px; font-size: 1.3rem; }
+    p, ol, ul { margin: 10px 0 16px; }
+    li { margin: 7px 0; }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    a:hover { text-decoration-thickness: 2px; }
+    a:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    code { padding: 1px 4px; background: var(--wash); overflow-wrap: anywhere; font-size: .9em; }
+    pre { margin: 9px 0 14px; padding: 11px 13px; border-left: 3px solid var(--blue); background: var(--wash); white-space: pre-wrap; overflow-wrap: anywhere; font-size: .84rem; line-height: 1.5; }
+    blockquote { margin: 12px 0 18px; padding: 7px 18px; border-left: 3px solid var(--blue); background: var(--wash); }
+    .eyebrow { margin: 0; color: var(--blue); font-size: .76rem; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; }
+    .dek { max-width: 850px; margin: 10px 0 0; font-size: 1.1rem; }
+    .metadata, .note { font-size: .88rem; opacity: .84; }
+    .metadata { margin-top: 15px; }
+    .summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 26px 0 20px; background: var(--blue); border: 1px solid var(--blue); }
+    .summary > div { min-height: 112px; padding: 17px 19px; background: var(--paper); }
+    .summary strong { display: block; font-family: "Iowan Old Style", Georgia, serif; font-size: 2rem; line-height: 1; }
+    .summary span { display: block; margin-top: 10px; font-size: .87rem; }
+    .takeaway { max-width: 900px; margin: 20px 0 0; padding-left: 14px; border-left: 3px solid var(--blue); }
+    .table-wrap { overflow-x: auto; margin: 14px 0 18px; }
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    caption { padding: 0 0 8px; text-align: left; font-weight: 700; }
+    th, td { padding: 9px 10px; border: 1px solid var(--blue); vertical-align: top; text-align: left; }
+    th { background: var(--wash); }
+    tbody tr:nth-child(even) { background: color-mix(in srgb, var(--wash) 48%, var(--paper)); }
+    .matrix th:first-child, .matrix td:first-child { min-width: 70px; font-weight: 700; }
+    .matrix td { min-width: 130px; }
+    .chip { display: inline-block; margin: 2px 3px 2px 0; padding: 2px 6px; border: 1px solid var(--blue); font-size: .76rem; line-height: 1.3; }
+    .chip.primary { color: var(--paper); background: var(--blue); }
+    .chip.noise { background: var(--wash); }
+    .none { opacity: .65; }
+    .status { font-weight: 700; }
+    .status.note-only { font-weight: 600; text-decoration: underline; text-decoration-style: dotted; }
+    .quick-nav { margin: 12px 0 26px; padding: 12px 16px; background: var(--wash); }
+    .quick-nav a { margin-right: 17px; white-space: nowrap; }
+    .run { padding-top: 6px; border-top: 1px solid var(--blue); }
+    .run-meta { margin: 0 0 15px; font-size: .9rem; }
+    .steps { padding-left: 1.4rem; }
+    .steps li { padding-left: 4px; margin: 0 0 17px; }
+    .steps strong { display: block; }
+    .finding { padding: 11px 14px; background: var(--wash); }
+    .back { margin: 8px 0 27px; font-size: .85rem; }
+    .small-table { font-size: .86rem; }
+    footer { margin-top: 44px; padding-top: 18px; border-top: 2px solid var(--ink); font-size: .86rem; }
+    @media (max-width: 720px) {
+      body { padding: 0 17px 42px; }
+      header { padding-top: 30px; }
+      .summary { grid-template-columns: 1fr; }
+      .summary > div { min-height: 80px; }
+      .quick-nav a { display: inline-block; margin-bottom: 6px; }
+      th, td { padding: 7px 8px; }
+    }
+    @media print {
+      body { max-width: none; padding: 0; font-size: 10pt; }
+      header { padding-top: 0; }
+      .quick-nav, .back { display: none; }
+      h2, h3 { break-after: avoid; }
+      tr, .steps li { break-inside: avoid; }
+      a { color: var(--ink); }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <p class="eyebrow">SREGym · experiment report · 06 October 2026</p>
+    <h1>Alert-directed mitigation across five applications</h1>
+    <p class="dek">A fixed Astronomy Shop checkout failure was tested with one to five simultaneous faults. The agent was asked to resolve one named alert without being told the fault mechanism or which other alerts were deliberate noise.</p>
+    <p class="metadata">CloudLab Kubernetes · GPT-5 Stratus agent · full deployment profile · one valid agent run per condition</p>
+    <div class="summary" aria-label="Experiment summary">
+      <div><strong>5 / 5</strong><span>Valid runs resolved the target checkout alert</span></div>
+      <div><strong>1 → 5</strong><span>Simultaneous faults across the five-run ladder</span></div>
+      <div><strong>1</strong><span>Run made an unnecessary additional Service edit</span></div>
+    </div>
+    <p class="takeaway"><strong>What the evidence supports:</strong> the agent restored the specified <code>HighRequestErrorRate</code> in all five valid runs. It did not demonstrate that it identified every noise fault; in Run 4 it also modified Product Catalog Service after correcting checkout.</p>
+  </header>
+
+  <main>
+    <nav class="quick-nav" aria-label="Report sections">
+      <a href="#ladder">Fault ladder</a><a href="#results">Results</a><a href="#method">Method</a><a href="#run-1">Run details</a><a href="#interpretation">Interpretation</a><a href="#sources">Evidence files</a>
+    </nav>
+
+    <section id="ladder" aria-labelledby="ladder-title">
+      <h2 id="ladder-title">Faults and applications at a glance</h2>
+      <p>All five applications were deployed in every run. Filled labels mark the primary checkout fault; outlined labels mark additional faults. An empty cell means the application was deployed without an injected fault. Faults were cumulative within each condition and reset before the next run.</p>
+      <div class="table-wrap">
+        <table class="matrix">
+          <caption>Five-run fault matrix</caption>
+          <thead><tr><th scope="col">Run</th><th scope="col">Astronomy Shop</th><th scope="col">Hotel Reservation</th><th scope="col">Social Network</th><th scope="col">Fleet Cast</th><th scope="col">Blueprint Hotel</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td><span class="chip primary">Checkout port</span></td><td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td></tr>
+            <tr><td>2</td><td><span class="chip primary">Checkout port</span><span class="chip noise">Ad image</span></td><td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td></tr>
+            <tr><td>3</td><td><span class="chip primary">Checkout port</span><span class="chip noise">Ad image</span></td><td><span class="chip noise">Recommendation selector</span></td><td class="none">—</td><td class="none">—</td><td class="none">—</td></tr>
+            <tr><td>4</td><td><span class="chip primary">Checkout port</span><span class="chip noise">Ad image</span></td><td><span class="chip noise">Recommendation selector</span></td><td><span class="chip noise">User service replicas</span></td><td class="none">—</td><td class="none">—</td></tr>
+            <tr><td>5</td><td><span class="chip primary">Checkout port</span><span class="chip noise">Ad image</span></td><td><span class="chip noise">Recommendation selector</span><span class="chip noise">MongoDB memory</span></td><td><span class="chip noise">User service replicas</span></td><td class="none">—</td><td class="none">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">The additional fault distribution was Astronomy Shop: 1; Hotel Reservation: 2; Social Network: 1. Fleet Cast and Blueprint Hotel Reservation remained healthy background deployments. Blueprint's workload method is a no-op in this version, so it did not add request traffic.</p>
+    </section>
+
+    <section id="results" aria-labelledby="results-title">
+      <h2 id="results-title">Five-run result</h2>
+      <div class="table-wrap">
+        <table>
+          <caption>Only the specified checkout alert was required to clear</caption>
+          <thead><tr><th scope="col">Run</th><th scope="col">Faults / required firing alerts</th><th scope="col">Target outcome</th><th scope="col">Time to mitigate</th><th scope="col">Agent edit quality</th></tr></thead>
+          <tbody>
+            <tr><td><a href="#run-1">1</a></td><td>1 / 1</td><td class="status">Resolved</td><td>413.1 s</td><td>Checkout address only; auto-submitted at step limit</td></tr>
+            <tr><td><a href="#run-2">2</a></td><td>2 / 2</td><td class="status">Resolved</td><td>332.0 s</td><td>Checkout address only; agent verified alert clearance</td></tr>
+            <tr><td><a href="#run-3">3</a></td><td>3 / 3</td><td class="status">Resolved</td><td>350.3 s</td><td>Checkout address only; auto-submitted at step limit</td></tr>
+            <tr><td><a href="#run-4">4</a></td><td>4 / 4</td><td class="status">Resolved</td><td>382.6 s</td><td class="status note-only">Unnecessary Product Catalog Service edit</td></tr>
+            <tr><td><a href="#run-5">5</a></td><td>5 / 5</td><td class="status">Resolved</td><td>345.3 s</td><td>Checkout address only; agent verified alert clearance</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">“Required firing alerts” counts the target and the intended additional alert families confirmed before launch; unrelated alerts could also exist. All five rows have <code>fault_preflight=passed</code>, <code>run_status=complete</code>, and <code>Mitigation.success=True</code> in the formal result CSVs. A passing target oracle does not certify that every agent edit was necessary.</p>
+    </section>
+
+    <section id="method" aria-labelledby="method-title">
+      <h2 id="method-title">Question, setup, and acceptance gates</h2>
+      <p><strong>Research question.</strong> With five applications deployed and 1–5 simultaneous faults, will an agent instructed to fix only Astronomy Shop's <code>HighRequestErrorRate</code> for <code>POST /api/checkout</code> restore that alert without being given the fault mechanism?</p>
+      <p><strong>Primary fault.</strong> The checkout Deployment's <code>PRODUCT_CATALOG_ADDR</code> was changed from <code>product-catalog:8080</code> to <code>product-catalog:8082</code>. The route under test was <code>POST /api/checkout</code>; <code>GET /api/cart</code> and <code>POST /api/cart</code> were healthy controls. The exact final instruction to the agent was:</p>
+      <blockquote>Astronomy Shop has a firing HighRequestErrorRate alert for POST /api/checkout. Investigate and resolve this alert.</blockquote>
+      <p>The prompt gave the agent Astronomy Shop context and the target alert, but not the wrong port, the root cause, the fault count, or a list of intended noise alerts.</p>
+      <div class="table-wrap">
+        <table class="small-table">
+          <caption>Additional real faults and their required independent alerts</caption>
+          <thead><tr><th scope="col">Added at</th><th scope="col">Injection and observed Kubernetes symptom</th><th scope="col">Required firing alert</th></tr></thead>
+          <tbody>
+            <tr><td>Run 2</td><td>Bad Astronomy ad image during a rolling update; new Pod in image-pull failure while the old Ready Pod and endpoint remained</td><td><code>PodStatusError</code> for that new Pod</td></tr>
+            <tr><td>Run 3</td><td>Hotel <code>recommendation</code> Service selector mismatch; Ready Pod present but Service endpoints absent</td><td><code>ServiceEndpointDown</code></td></tr>
+            <tr><td>Run 4</td><td>Social <code>user-service</code> Deployment scaled to zero available replicas</td><td><code>DeploymentNotReady</code></td></tr>
+            <tr><td>Run 5</td><td>Hotel <code>mongodb-rate</code> memory request set to <code>1Ti</code>; replacement Pod <code>PodScheduled=False</code>, reason <code>Unschedulable</code></td><td><code>PodSchedulingFailure</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ol>
+        <li><strong>Fresh baseline:</strong> deploy all five applications and observability components; reject unrelated firing alerts in the monitored families. All five formal CSVs record <code>baseline_alerts=[]</code>.</li>
+        <li><strong>Primary fault gate:</strong> require the wrong address, actual checkout requests, at least 90% checkout failures, the exact firing target alert, healthy cart requests, and a failing primary mitigation oracle.</li>
+        <li><strong>Noise gate:</strong> after each added fault, require its Kubernetes symptom and a firing alert with identifying namespace/workload labels. Compare primary-path Service endpoints, request rates, failure ratios, and oracle state with the preceding snapshot.</li>
+        <li><strong>Non-interference gate:</strong> endpoints must not change; checkout/cart request rates must stay at or above 0.01 rps and 20% of the prior snapshot; cart controls remain healthy and the primary oracle remains failing. The valid Run 5 used two passing samples five seconds apart within 90 seconds after a transient low-rate preflight rejection; the numeric thresholds did not change.</li>
+        <li><strong>Agent and grading:</strong> verify kubectl, Jaeger, and Prometheus MCP routes before launch. Run one GPT-5 Stratus mitigation attempt per condition (20-round cap, 1,200-second agent timeout, filtered internet). Grade only the specified checkout alert and the checkout-port mitigation oracle. Restore injected faults and clean application namespaces between conditions.</li>
+      </ol>
+      <div class="table-wrap">
+        <table class="small-table">
+          <caption>Final pre-agent traffic snapshot in each valid run</caption>
+          <thead><tr><th scope="col">Run</th><th scope="col">Checkout rps</th><th scope="col">Checkout failure ratio</th><th scope="col">GET cart rps</th><th scope="col">POST cart rps</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>0.0381</td><td>98.5%</td><td>0.0469</td><td>0.0571</td></tr>
+            <tr><td>2</td><td>0.0661</td><td>about 100%</td><td>0.0571</td><td>0.2190</td></tr>
+            <tr><td>3</td><td>0.0381</td><td>100%</td><td>0.0571</td><td>0.1714</td></tr>
+            <tr><td>4</td><td>0.0345</td><td>about 100%</td><td>0.0381</td><td>0.0762</td></tr>
+            <tr><td>5</td><td>0.0190</td><td>100%</td><td>0.0476</td><td>0.0476</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">Both cart routes had a 0% observed failure ratio in every final snapshot. Independently extrapolated Prometheus rates yielded a raw checkout ratio slightly above 100% in Runs 2 and 4; these are displayed as “about 100%.”</p>
+    </section>
+
+    <section id="run-details" aria-labelledby="run-details-title">
+      <h2 id="run-details-title">Run-by-run investigation evidence</h2>
+      <p class="note">Step numbers below are trajectory step IDs, not wall-clock minutes. The excerpts are selected from tool observations; full trajectories remain available at the paths in the evidence index.</p>
+
+      <section class="run" id="run-1" aria-labelledby="run-1-title">
+        <h3 id="run-1-title">Run 1 · Checkout fault only</h3>
+        <p class="run-meta">Target firing before launch · checkout failure ratio 98.5% · TTM 413.1 s · step-limit submission</p>
+        <ol class="steps">
+          <li><strong>Steps 3–12 — Follow telemetry.</strong> The agent queried services, the dependency graph, checkout/frontend operations, Jaeger traces, and Prometheus metrics to narrow the failing route. It was given the alert, not the wrong port.</li>
+          <li><strong>Steps 13–18 — Check Kubernetes routing and logs.</strong> It inspected Astronomy Pods, Services, checkout/cart/Product Catalog endpoints, and relevant logs. Product Catalog still had an endpoint on 8080, so this was not a no-endpoints failure.<pre>kubectl get endpoints -n astronomy-shop checkout cart product-catalog
+checkout          10.244.149.120:8080
+cart              10.244.149.19:8080
+product-catalog   10.244.149.60:8080</pre></li>
+          <li><strong>Steps 19–21 — Compare Deployments.</strong> The checkout Deployment revealed the mismatched dependency address:<pre>PRODUCT_CATALOG_ADDR: product-catalog:8082</pre></li>
+          <li><strong>Step 22 — Apply the correction.</strong> The agent ran <code>kubectl set env deploy/checkout -n astronomy-shop PRODUCT_CATALOG_ADDR=product-catalog:8080</code>; kubectl returned <code>deployment.apps/checkout env updated</code>.</li>
+          <li><strong>Step 23 — External result.</strong> The 20-round limit triggered automatic submission. The trajectory contains no agent-initiated post-fix alert query; the external result recorded <code>Mitigation.success=True</code>.</li>
+        </ol>
+        <p class="finding"><strong>Reading:</strong> this baseline run found and changed only the checkout configuration, but spent the full round budget and relied on the external outcome for final alert verification.</p>
+        <p class="back"><a href="#results">Back to result table ↑</a></p>
+      </section>
+
+      <section class="run" id="run-2" aria-labelledby="run-2-title">
+        <h3 id="run-2-title">Run 2 · Add the Astronomy ad image fault</h3>
+        <p class="run-meta">Target + ad <code>PodStatusError</code> firing before launch · TTM 332.0 s · agent-initiated submission</p>
+        <ol class="steps">
+          <li><strong>Step 3 — Encounter visible noise.</strong> The Astronomy Pod list contained a new ad Pod in <code>ImagePullBackOff</code> and an older Ready ad Pod. The agent did not attempt an ad repair.<pre>ad-648954f6b-8f65w   0/1   ImagePullBackOff
+ad-78446fd77f-jdr8l  1/1   Running</pre></li>
+          <li><strong>Steps 4–7 — Identify the checkout dependency error.</strong> A checkout trace showed a Product Catalog dial timeout on 8082. Service and Deployment queries showed checkout using 8082 while Product Catalog served on 8080.<pre>connection error: dial tcp 10.96.229.179:8082: i/o timeout
+PRODUCT_CATALOG_ADDR: product-catalog:8082</pre></li>
+          <li><strong>Steps 8–10 — Restore the checkout address.</strong> The agent set <code>PRODUCT_CATALOG_ADDR=product-catalog:8080</code> and confirmed <code>deployment "checkout" successfully rolled out</code>.</li>
+          <li><strong>Steps 11–15 — Inspect recovery.</strong> It checked the new checkout Pod and later traces; sampled traces contained HTTP 200 checkout responses and no repeat of the cited dial error.</li>
+          <li><strong>Steps 16–19 — Verify the specified alert.</strong> After waiting for the alert calculation window, the agent queried the exact target labels and received an empty vector, then submitted.<pre>sum by (method,name,namespace,alertname,alertstate)
+  (ALERTS{alertname="HighRequestErrorRate", namespace="astronomy-shop",
+          method="POST", name="/api/checkout"})
+→ result: []</pre></li>
+        </ol>
+        <p class="finding"><strong>Reading:</strong> the ad fault was visible to the agent, but its investigation and only mutation stayed on checkout. Clearing the ad alert was outside the task.</p>
+        <p class="back"><a href="#results">Back to result table ↑</a></p>
+      </section>
+
+      <section class="run" id="run-3" aria-labelledby="run-3-title">
+        <h3 id="run-3-title">Run 3 · Add Hotel recommendation with no Service endpoints</h3>
+        <p class="run-meta">Target + ad <code>PodStatusError</code> + Hotel <code>ServiceEndpointDown</code> firing · TTM 350.3 s · step-limit submission</p>
+        <ol class="steps">
+          <li><strong>Host preflight — Confirm the independent Hotel fault.</strong> The <code>recommendation</code> Deployment had a Ready Pod, but its selector-mismatched Service had zero endpoints and the Hotel endpoint alert was firing. This observation came from the host preflight, not the agent's investigation.</li>
+          <li><strong>Steps 3–9 — Stay on the target route.</strong> The agent saw the ad image-pull Pod in Astronomy, then queried Astronomy Services, checkout traces, checkout/Product Catalog Deployments, and checkout logs. The checkout Deployment still showed <code>product-catalog:8082</code>; it did not query or edit the Hotel selector.</li>
+          <li><strong>Steps 10–13 — Fix and observe rollout.</strong> It changed checkout to <code>product-catalog:8080</code>, waited, and saw a new Ready checkout Pod.</li>
+          <li><strong>Steps 14–16 — Attempt configuration verification.</strong> Two in-Pod <code>printenv</code> attempts failed: the first pipe was disallowed, and the second exited 127. It then used <code>kubectl describe deploy checkout</code>, which showed the corrected address.<pre>#14 Command Rejected: Pipe commands are forbidden
+#15 command terminated with exit code 127
+#16 PRODUCT_CATALOG_ADDR: product-catalog:8080</pre></li>
+          <li><strong>Steps 17–23 — Continue telemetry checks.</strong> It queried more checkout/frontend-proxy traces and an HTTP error-rate metric, then hit the 20-round limit. That metric query returned an empty vector, but it was not a direct target <code>ALERTS</code> query; the external target oracle recorded success.</li>
+        </ol>
+        <p class="finding"><strong>Reading:</strong> the cross-application Hotel alert did not redirect the agent. The failed <code>printenv</code> calls should not be counted as successful verification.</p>
+        <p class="back"><a href="#results">Back to result table ↑</a></p>
+      </section>
+
+      <section class="run" id="run-4" aria-labelledby="run-4-title">
+        <h3 id="run-4-title">Run 4 · Add Social Network's zero-replica user service</h3>
+        <p class="run-meta">Four required alerts firing before launch · TTM 382.6 s · target resolved with one unnecessary extra edit</p>
+        <ol class="steps">
+          <li><strong>Host preflight — Confirm the Social fault.</strong> <code>user-service</code> had zero available replicas and <code>DeploymentNotReady</code> was firing. The earlier ad and Hotel faults remained active; checkout still failed at about 100% while cart requests remained healthy.</li>
+          <li><strong>Steps 3–9 — Find and fix the checkout address.</strong> The agent queried services, a dependency graph, checkout traces, and Deployment YAML. It found <code>product-catalog:8082</code>, changed checkout to 8080, and observed <code>deployment "checkout" successfully rolled out</code>.</li>
+          <li><strong>Steps 10–18 — Investigate further.</strong> It repeatedly inspected checkout traces, Pods, Product Catalog Service/Deployment, and checkout logs. Some queried traces still contained HTTP 500. The trajectory does not establish that those records came from requests after the new rollout.</li>
+          <li><strong>Steps 19–20 — Make an extra Service change.</strong> Despite the checkout correction, the agent patched Product Catalog Service and then read back its YAML. The second port mapped 8082 to the existing 8080 target:<pre>service/product-catalog patched
+ports:
+- name: tcp-service
+  port: 8080
+  targetPort: 8080
+- name: grpc
+  port: 8082
+  targetPort: 8080</pre></li>
+          <li><strong>Steps 21–23 — Auto-submit.</strong> The agent checked another trace and Product Catalog Pod state, then reached the 20-round limit. The external oracle marked the target resolved.</li>
+        </ol>
+        <p class="finding"><strong>Reading:</strong> this was a valid target-alert success with a change-quality defect. Runs 1, 2, 3, and 5 resolved the same primary fault by changing checkout alone, so the added Service port was not needed to establish a working mitigation. The target-only grader did not penalize it.</p>
+        <p class="back"><a href="#results">Back to result table ↑</a></p>
+      </section>
+
+      <section class="run" id="run-5" aria-labelledby="run-5-title">
+        <h3 id="run-5-title">Run 5 · Add Hotel's unschedulable MongoDB-rate Pod</h3>
+        <p class="run-meta">Five required alerts firing before launch · checkout 0.0190 rps at 100% failure · TTM 345.3 s · agent-initiated submission</p>
+        <ol class="steps">
+          <li><strong>Host preflight — Confirm all five faults.</strong> The primary target, ad <code>PodStatusError</code>, Hotel <code>ServiceEndpointDown</code>, Social <code>DeploymentNotReady</code>, and Hotel <code>PodSchedulingFailure</code> all fired. The <code>mongodb-rate</code> Pod had <code>PodScheduled=False</code> with reason <code>Unschedulable</code>. Both cart controls had about 0.0476 rps and 0% failures.</li>
+          <li><strong>Steps 3–6 — Follow checkout traces despite visible noise.</strong> The Astronomy Pod list again showed the ad image-pull failure. A checkout trace showed order preparation failing on a Product Catalog dial to 8082:<pre>failed to prepare order: failed to get product
+connection error: dial tcp 10.103.170.21:8082: i/o timeout</pre></li>
+          <li><strong>Steps 7–9 — Compare Service and Deployment.</strong> Product Catalog served on port 8080, while checkout's <code>PRODUCT_CATALOG_ADDR</code> was <code>product-catalog:8082</code>.</li>
+          <li><strong>Steps 10–14 — Make one targeted edit.</strong> The agent set checkout's address to <code>product-catalog:8080</code>. The rollout completed, and the new Pod query returned that value.<pre>deployment "checkout" successfully rolled out
+product-catalog:8080</pre></li>
+          <li><strong>Steps 15–20 — Check recovery.</strong> It waited and inspected later checkout traces. Sampled traces included HTTP 200 checkout responses and no repeat of the 8082 connection error. No Hotel or Social remediation command appeared in the trajectory.</li>
+          <li><strong>Steps 21–22 — Verify and submit.</strong> <code>ALERTS{alertname="HighRequestErrorRate"}</code> returned an empty vector; the agent submitted, and the external result recorded <code>Mitigation.success=True</code>.<pre>ALERTS{alertname="HighRequestErrorRate"} → result: []</pre></li>
+        </ol>
+        <p class="finding"><strong>Reading:</strong> the highest-fault condition still resulted in a scoped checkout correction and agent-initiated alert verification. It does not show that the agent diagnosed each additional alert; it shows the additional alerts did not divert this run from the assigned target.</p>
+        <p class="back"><a href="#results">Back to result table ↑</a></p>
+      </section>
+    </section>
+
+    <section id="exclusions" aria-labelledby="exclusions-title">
+      <h2 id="exclusions-title">Attempts excluded from the five-run result</h2>
+      <p>These attempts were used to bring the five-application environment and preflight to a valid state. A failed injection/preflight did not launch an agent; a started agent with broken tools or no valid submission was also excluded. They are not counted as target-mitigation failures.</p>
+      <div class="table-wrap">
+        <table class="small-table">
+          <caption>Excluded records, identified by their remote result directory</caption>
+          <thead><tr><th scope="col">Directory / condition</th><th scope="col">Recorded issue</th><th scope="col">Disposition</th></tr></thead>
+          <tbody>
+            <tr><td><code>1005_1803</code> / Run 1</td><td>After preflight, the agent's Jaeger MCP route returned <code>502 Bad Gateway</code>; the driver had no valid submission.</td><td>Tool infrastructure failure</td></tr>
+            <tr><td><code>1005_1833</code> / Run 1</td><td>Prometheus alert query during injection failed: <code>no endpoints available for service "prometheus-server"</code>.</td><td>No agent launch</td></tr>
+            <tr><td><code>1005_1848</code> and <code>1005_2125</code> / Run 1</td><td>Result files record <code>run_status=incomplete</code> and <code>no_submission</code>; there is no comparable formal mitigation result.</td><td>Excluded; no causal claim about agent success</td></tr>
+            <tr><td><code>1005_2253</code> / Run 3</td><td>Baseline already contained <code>FailedPodsDetected</code> alerts for Hotel and Social wrk2 Jobs.</td><td>Contaminated baseline rejected</td></tr>
+            <tr><td><code>1005_2317</code> and <code>1005_2338</code> / Run 3</td><td>Respectively: ad-traffic preflight timeout, then a checkout/cart non-interference gate rejection after ad injection.</td><td>Faults recovered; environment rebuilt</td></tr>
+            <tr><td><code>1006_1306</code> / Run 5</td><td>After ad injection, checkout's two-minute request rate briefly fell from about 0.0379 to 0.0095 rps, below the 0.01 rps floor. Checkout still failed at about 100% and cart remained healthy.</td><td>No agent launch; cleaned and reran as <code>1006_1329</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">The Run 5 gate was made less sensitive to a single low-volume rate window by requiring two passing snapshots five seconds apart within 90 seconds. The 0.01 rps floor, 20% relative floor, failure and endpoint checks stayed the same. Its sampling procedure therefore differs from Runs 1–4 and is treated as a comparison limitation.</p>
+    </section>
+
+    <section id="interpretation" aria-labelledby="interpretation-title">
+      <h2 id="interpretation-title">Interpretation and limits</h2>
+      <p><strong>Observed outcome.</strong> The exact checkout target was restored in all five valid runs. TTM ranged from 332.0 to 413.1 seconds and did not rise monotonically with the number of injected faults. The agent did not repair the intended Hotel or Social noise faults. Its Pod listings exposed the ad failure in several runs, but the record supports “not diverted from the target,” not “diagnosed all noise.”</p>
+      <p><strong>Change quality.</strong> Run 4 shows why alert clearance and edit quality must be reported separately. The agent first corrected checkout, then added an unnecessary 8082 port to Product Catalog Service. The success oracle accepted the resolved target; it did not score the extra Service mutation.</p>
+      <ul>
+        <li><strong>Sample size and order:</strong> one valid agent attempt per condition, with a fixed fault order and no randomization. Five successes describe these five observations; they do not estimate an overall success probability or prove that extra faults have no effect.</li>
+        <li><strong>Task specificity:</strong> the agent prompt named Astronomy Shop, the alert family, and the <code>POST /api/checkout</code> route. The experiment tests alert-directed repair, not open-ended prioritization among unlabeled alerts.</li>
+        <li><strong>Traffic and environment:</strong> checkout preflight rates were only about 0.019–0.066 rps, so two-minute rates fluctuate. Blueprint Hotel Reservation was deployed but added no request workload. An unrelated TiDB false alert appeared during Run 2; the rule was corrected before Run 3.</li>
+        <li><strong>Procedure change:</strong> Run 5 used repeated passing traffic snapshots after its excluded low-rate attempt, while Runs 1–4 used a single accepted snapshot. This should be kept in mind when comparing conditions.</li>
+        <li><strong>Cluster preparation:</strong> to host all five applications, the node's root partition was expanded from about 64 to 216 GiB and kubelet <code>maxPods</code> from 110 to 200. These host changes remain; application namespaces were removed after the experiment, the node was Ready, and about 163 GiB remained free.</li>
+      </ul>
+    </section>
+
+    <section id="sources" aria-labelledby="sources-title">
+      <h2 id="sources-title">Evidence and reproduction</h2>
+      <p>The local CSVs contain <code>fault_preflight_evidence.steps</code>, <code>TTM</code>, <code>Mitigation.success</code>, and phase status. The <a href="multiapp-checkout-alert-ladder-2026-10-06.html">Chinese report</a> and <a href="../agents/multiapp-checkout-alert-ladder-design.md">fault and non-interference design</a> provide related documentation.</p>
+      <div class="table-wrap">
+        <table class="small-table">
+          <caption>Formal result files and full trajectory directories</caption>
+          <thead><tr><th scope="col">Run</th><th scope="col">Local CSV</th><th scope="col">Remote directory beneath <code>results/</code></th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td><a href="../../results/multiapp-checkout-alert-ladder-2026-10-06/multiapp_checkout_alert_1_stratus_results.csv">Result CSV</a></td><td><code>1005_2147/stratus/multiapp_checkout_alert_1/</code></td></tr>
+            <tr><td>2</td><td><a href="../../results/multiapp-checkout-alert-ladder-2026-10-06/multiapp_checkout_alert_2_stratus_results.csv">Result CSV</a></td><td><code>1005_2226/stratus/multiapp_checkout_alert_2/</code></td></tr>
+            <tr><td>3</td><td><a href="../../results/multiapp-checkout-alert-ladder-2026-10-06/multiapp_checkout_alert_3_stratus_results.csv">Result CSV</a></td><td><code>1006_1117/stratus/multiapp_checkout_alert_3/</code></td></tr>
+            <tr><td>4</td><td><a href="../../results/multiapp-checkout-alert-ladder-2026-10-06/multiapp_checkout_alert_4_stratus_results.csv">Result CSV</a></td><td><code>1006_1147/stratus/multiapp_checkout_alert_4/</code></td></tr>
+            <tr><td>5</td><td><a href="../../results/multiapp-checkout-alert-ladder-2026-10-06/multiapp_checkout_alert_5_stratus_results.csv">Result CSV</a></td><td><code>1006_1329/stratus/multiapp_checkout_alert_5/</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">Remote root: <code>jackj@ms1008.utah.cloudlab.us:/users/jackj/SREGym-checkout-alert-test-20261003/results/</code>. Within each run directory, <code>run_1/trajectory.json</code> contains the numbered agent steps and <code>phases_attempt1.jsonl</code> contains phase and preflight records. The excluded first Run 5 preflight is at <code>1006_1306/stratus/multiapp_checkout_alert_5/phases_attempt1.jsonl</code>. Local <code>results/</code> is ignored by Git and will not be shared automatically with the HTML file.</p>
+      <p>The formal command shape was:</p>
+      <pre>SREGYM_AGENT_IMAGE=sregym-agent-base:latest \
+  .venv/bin/python main.py --problem multiapp_checkout_alert_N \
+  --stages mitigation --profile full --agent stratus --model gpt-5 \
+  --agent-timeout 1200</pre>
+      <p class="note">Replace <code>N</code> with 1–5 and start each condition from a clean application state.</p>
+    </section>
+  </main>
+  <footer>Prepared from the five formal result CSVs, their preflight snapshots, and the corresponding agent trajectories. This page is a descriptive experiment report, not a statistical success-rate estimate.</footer>
+</body>
+</html>

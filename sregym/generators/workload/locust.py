@@ -73,16 +73,21 @@ class LocustWorkloadManager(StreamWorkloadManager):
                 body=job_template,
             )
             print("Waiting for locust-fetcher pod to be created...")
-            while True:
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline:
                 pod = self.core_v1_api.read_namespaced_pod_status(
                     name="locust-fetcher",
                     namespace=self.namespace,
                 )
+                if pod.status.phase == "Failed":
+                    raise RuntimeError(f"locust-fetcher failed in {self.namespace}: {pod.status.reason}")
                 conditions = pod.status.conditions or []
                 ready = any(cond.type == "Ready" and cond.status == "True" for cond in conditions)
                 if ready:
                     break
                 time.sleep(5)
+            else:
+                raise TimeoutError(f"locust-fetcher was not Ready in {self.namespace} within 120s")
             print("Pod locust-fetcher created.")
         except client.exceptions.ApiException as e:
             print(f"Error creating pod: {e}")

@@ -60,6 +60,7 @@ from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from sregym.conductor.problems.missing_configmap import MissingConfigMap
 from sregym.conductor.problems.missing_env_variable import MissingEnvVariable
 from sregym.conductor.problems.missing_service import MissingService
+from sregym.conductor.problems.multiapp_checkout_alert_ladder import MultiAppCheckoutAlertLadder
 from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures  # noqa: F401
 from sregym.conductor.problems.mutating_webhook_resource_limits import MutatingWebhookResourceLimits
 from sregym.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
@@ -130,6 +131,11 @@ class ProblemRegistry:
             # --- REGULAR APPLICATION PROBLEMS ---
             "incorrect_image": IncorrectImage,
             "incorrect_port_assignment": IncorrectPortAssignment,
+            "multiapp_checkout_alert_1": lambda: MultiAppCheckoutAlertLadder(1),
+            "multiapp_checkout_alert_2": lambda: MultiAppCheckoutAlertLadder(2),
+            "multiapp_checkout_alert_3": lambda: MultiAppCheckoutAlertLadder(3),
+            "multiapp_checkout_alert_4": lambda: MultiAppCheckoutAlertLadder(4),
+            "multiapp_checkout_alert_5": lambda: MultiAppCheckoutAlertLadder(5),
             "kafka_producer_leak": KafkaProducerLeak,
             "unschedulable_incorrect_port_assignment": lambda: IncorrectPortAssignment(unschedulable=True),
             "misconfig_app_hotel_res": MisconfigAppHotelRes,

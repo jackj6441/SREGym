@@ -105,6 +105,9 @@ class Prometheus:
         installed = json.loads(result.stdout)
         with open(Path(self.helm_configs["chart_path"]) / "values.yaml") as file:
             expected = yaml.safe_load(file)
+        if installed.get("serverFiles") != expected.get("serverFiles"):
+            self.logger.info("Prometheus rules or scrape configuration changed; redeploying")
+            return False
         # Compare actual values rather than a new marker, so releases installed
         # before profile tracking also work. Other Helm values remain unrelated.
         with open(BASE_DIR / "observer" / "prometheus" / "values-svelte.yaml") as file:

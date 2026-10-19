@@ -248,12 +248,24 @@ async def get_app():
     app_inst = _conductor.app
     logger.debug(f"API returns App instance: {app_inst}")
     namespaces = getattr(app_inst, "namespaces", None) or [app_inst.namespace]
-    return {
+    app_info = {
         "app_name": app_inst.app_name,
         "namespace": app_inst.namespace,
         "namespaces": namespaces,
         "descriptions": str(app_inst.description),
     }
+    if _conductor.problem_id == "incorrect_port_assignment" or _conductor.problem_id.startswith(
+        "multiapp_checkout_alert_"
+    ):
+        # The agent may know the alert it was assigned, but not the problem ID
+        # or the injected port change. Artifact IDs are intentionally opaque.
+        if _conductor.problem_id.startswith("multiapp_checkout_alert_"):
+            app_info["app_name"] = "Astronomy Shop"
+            app_info["descriptions"] = str(_conductor.problem.primary.app.description)
+        app_info["target_alert"] = {
+            "alertname": "HighRequestErrorRate", "method": "POST", "name": "/api/checkout",
+        }
+    return app_info
 
 
 def run_api(conductor):

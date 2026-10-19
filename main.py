@@ -31,6 +31,7 @@ from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
+from sregym.generators.noise.impl.astronomy_ad_image import ASTRONOMY_AD_IMAGE_PROFILE
 from sregym.generators.noise.impl.clock_skew import DEFAULT_DURATION_SECONDS, NOISE_PROFILES
 from sregym.generators.noise.manager import get_noise_manager
 from sregym.phases import read_ledger as read_phase_ledger
@@ -303,7 +304,11 @@ def driver_loop(
             """Run safety cleanup without letting a stuck Kubernetes call hang the campaign."""
             try:
                 conductor.finish_problem_in_background()
-                await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                cleanup_timeout = (
+                    900 if (conductor.problem_id or "").startswith("multiapp_checkout_alert_")
+                    else CLEANUP_DRAIN_TIMEOUT_SECONDS
+                )
+                await conductor.wait_for_submission_work(timeout=cleanup_timeout)
             except TimeoutError:
                 conductor.abandon_submission_work()
                 conductor.results["cleanup_timed_out"] = True
@@ -435,7 +440,10 @@ def driver_loop(
                 )
 
                 # Retry start_problem up to 3 times to handle transient deploy failures
-                max_deploy_retries = 3
+                # A failed multi-app alert gate is an invalid condition, not a
+                # transient agent outcome. Do not spend another full deployment
+                # attempting to make a missing alert appear.
+                max_deploy_retries = 1 if pid.startswith("multiapp_checkout_alert_") else 3
                 result = None
                 deploy_cleanup_failed = False
                 for deploy_attempt in range(1, max_deploy_retries + 1):
@@ -1139,7 +1147,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--noise",
         action="store_true",
-        help="Enable transient noise injection via Chaos Mesh during problem runs",
+        help="Enable a selected deterministic profile or random Chaos Mesh noise during problem runs",
     )
     parser.add_argument(
         "--noise-profile",
@@ -1151,7 +1159,7 @@ if __name__ == "__main__":
         "--noise-duration-seconds",
         type=int,
         default=DEFAULT_DURATION_SECONDS,
-        help=f"Duration used by deterministic noise profiles in seconds (default: {DEFAULT_DURATION_SECONDS})",
+        help=f"Duration used by time-based noise profiles in seconds (default: {DEFAULT_DURATION_SECONDS})",
     )
     parser.add_argument(
         "--internet-access",
@@ -1202,5 +1210,10 @@ if __name__ == "__main__":
         parser.error("--noise-profile requires --noise")
     if args.noise_duration_seconds < 1:
         parser.error("--noise-duration-seconds must be a positive integer")
+    if args.noise_profile == ASTRONOMY_AD_IMAGE_PROFILE:
+        if args.problem != "incorrect_port_assignment":
+            parser.error("Astronomy ad image treatment requires --problem incorrect_port_assignment")
+        if args.profile != "full":
+            parser.error("Astronomy ad image treatment requires --profile full")
 
     main(args)

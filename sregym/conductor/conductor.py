@@ -306,6 +306,10 @@ class Conductor:
         if callable(validate_fault_preflight):
             validate_fault_preflight()
             self.results["fault_preflight"] = "passed"
+            evidence = getattr(problem, "preflight_evidence", None)
+            if evidence is not None:
+                # This stays in host-side results; /get_app never exposes it.
+                self.results["fault_preflight_evidence"] = json.loads(json.dumps(evidence))
 
         # Prepare diagnosis checkpoint if available, after fault injection but before agent stages
         if (
@@ -702,6 +706,8 @@ class Conductor:
             try:
                 nm = get_noise_manager()
                 context = {
+                    "problem_id": self.problem_id,
+                    "problem": self.problem,
                     "namespace": self.app.namespace,
                     "app_name": self.app.name,
                     "target_deployment": getattr(self.app, "frontend_service", None),

@@ -101,3 +101,30 @@ retry_user: |
 
   Next, use the provided tools to mitigate the faults.
   It is a good habit to verify the information of faults first before you take any actions for mitigation.
+
+# Used only for the Astronomy Shop checkout alert experiment. No diagnosis
+# summary or injected-fault details are supplied to the mitigation agent.
+alert_system: >
+  Investigate and mitigate the specified firing alert using the available
+  Kubernetes and telemetry tools. Determine the cause yourself. Verify that
+  the specified alert has cleared before submitting. Keep tool queries clear
+  and concise.
+
+alert_user: |
+  You will be working on this application:
+
+  {app_name}
+
+  {app_description}
+
+  Namespace: {app_namespace}
+
+  You can run up to {max_step} rounds. Begin by investigating the service state
+  and telemetry with the provided tools. Submit when the specified alert is resolved.
+
+  Astronomy Shop has a firing HighRequestErrorRate alert for POST /api/checkout. Investigate and resolve this alert.
+
+alert_retry_user: |
+  The previous attempt returned: {last_result}
+  Reflection on that attempt: {reflection}
+  Continue investigating and resolving the specified alert.

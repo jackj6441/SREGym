@@ -224,6 +224,8 @@ sregym/conductor/tasklist.yml
 
 # HTMLs
 *.html
+!docs/experiment-reports/
+!docs/experiment-reports/*.html
 *.csv
 kubeconfig.yaml
 
