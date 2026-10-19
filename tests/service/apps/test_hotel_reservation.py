@@ -114,3 +114,48 @@ spec:
     assert deployments[0]["spec"]["template"]["spec"]["containers"][0]["image"] == "local/hotel:release-v1"
     assert deployments[1]["spec"]["template"]["spec"]["containers"][0]["image"] == "original:two"
     assert manifest.read_text().count("original:") == 2
+
+
+def test_cpu_frequency_layout_is_rendered_for_both_experiment_arms(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    manifest = source / "services.yaml"
+    manifest.write_text(
+        """\
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recommendation
+spec:
+  template:
+    spec:
+      containers: [{name: hotel-reserv-recommendation}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rate
+spec:
+  template:
+    spec:
+      containers: [{name: hotel-reserv-rate}]
+"""
+    )
+    app = HotelReservation.__new__(HotelReservation)
+    app.k8s_deploy_path = source
+    app.deployment_env_overrides = {}
+    app.deployment_image_overrides = {}
+    app.cpu_frequency_worker_node = "worker-rec"
+
+    with app._rendered_deployment_configs() as rendered_path:
+        deployments = list(yaml.safe_load_all((Path(rendered_path) / "services.yaml").read_text()))
+
+    def requirement(deployment):
+        pod_spec = deployment["spec"]["template"]["spec"]
+        return pod_spec["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
+            "nodeSelectorTerms"
+        ][0]["matchFields"][0]
+
+    assert requirement(deployments[0]) == {"key": "metadata.name", "operator": "In", "values": ["worker-rec"]}
+    assert requirement(deployments[1]) == {"key": "metadata.name", "operator": "NotIn", "values": ["worker-rec"]}
+    assert "affinity" not in manifest.read_text()

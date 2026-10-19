@@ -9,13 +9,19 @@ import uuid
 from kubernetes.client.rest import ApiException
 
 from sregym.generators.images import CLOCK_SKEW_OBSERVER_IMAGE
+from sregym.generators.noise.impl.cpu_frequency import CPU_FREQUENCY_CONTROL_PROFILE, CPU_FREQUENCY_PROFILE
 from sregym.service.kubectl import KubeCtl
 
 logger = logging.getLogger(__name__)
 
 CLOCK_SKEW_PROFILE = "clock-skew"
 CLOCK_SKEW_GEO_PROFILE = "clock-skew-geo"
-NOISE_PROFILES = (CLOCK_SKEW_PROFILE, CLOCK_SKEW_GEO_PROFILE)
+NOISE_PROFILES = (
+    CLOCK_SKEW_PROFILE,
+    CLOCK_SKEW_GEO_PROFILE,
+    CPU_FREQUENCY_PROFILE,
+    CPU_FREQUENCY_CONTROL_PROFILE,
+)
 # Cover two long agent stages plus oracle evaluation without silently losing
 # the deterministic treatment before final cleanup.
 DEFAULT_DURATION_SECONDS = 7200

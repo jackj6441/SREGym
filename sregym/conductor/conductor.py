@@ -63,6 +63,7 @@ class ConductorConfig:
     enable_noise: bool = False
     noise_profile: str | None = None
     noise_duration_seconds: int = DEFAULT_DURATION_SECONDS
+    cpu_frequency_worker_node: str | None = None
     internet_policy: InternetPolicy = field(default_factory=InternetPolicy)
     k8s_proxy_listen_host: str = "127.0.0.1"
     k8s_proxy_listen_port: int = 16443
@@ -666,6 +667,10 @@ class Conductor:
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
         self.app = self.problem.app
+        if getattr(self.config, "cpu_frequency_worker_node", None):
+            if self.problem_id != "wrong_service_selector_hotel_reservation":
+                raise RuntimeError("CPU frequency node placement only supports the Hotel Reservation selector problem")
+            self.app.cpu_frequency_worker_node = self.config.cpu_frequency_worker_node
         self.detection_oracle = DetectionOracle(self.problem)
 
         self.dependency_check(["kubectl", "helm", "docker"])
@@ -702,6 +707,9 @@ class Conductor:
             try:
                 nm = get_noise_manager()
                 context = {
+                    "problem_id": self.problem_id,
+                    "problem": self.problem,
+                    "cpu_frequency_worker_node": getattr(self.config, "cpu_frequency_worker_node", None),
                     "namespace": self.app.namespace,
                     "app_name": self.app.name,
                     "target_deployment": getattr(self.app, "frontend_service", None),

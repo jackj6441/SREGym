@@ -30,6 +30,11 @@ from sregym.generators.noise.impl.clock_skew import (
 )
 from sregym.generators.noise.impl.clock_skew_geo import ClockSkewGeo
 from sregym.generators.noise.impl.clock_skew_recommendation import ClockSkewRecommendation
+from sregym.generators.noise.impl.cpu_frequency import (
+    CPU_FREQUENCY_CONTROL_PROFILE,
+    CPU_FREQUENCY_PROFILE,
+    CpuFrequencyTreatment,
+)
 from sregym.service.kubectl import KubeCtl
 
 logger = logging.getLogger(__name__)
@@ -65,6 +70,9 @@ class NoiseManager:
         self.current_stage: str | None = None
         self.target_namespace: str | None = None
         self.target_deployment: str | None = None
+        self.problem_id: str | None = None
+        self.cpu_frequency_worker_node: str | None = None
+        self.problem = None
         self.noise_profile: str | None = None
         self.protected_workload = None
         self.duration_seconds = DEFAULT_DURATION_SECONDS
@@ -77,6 +85,7 @@ class NoiseManager:
         self._lock = threading.Lock()
         self._chaos_mesh_ready = False
         self._evidence: dict[str, Any] = {}
+        self._cpu_treatment: CpuFrequencyTreatment | None = None
 
     # ── Context from Conductor ────────────────────────────────────────
 
@@ -87,6 +96,9 @@ class NoiseManager:
     def set_problem_context(self, context: dict[str, Any]):
         self.target_namespace = context.get("namespace")
         self.target_deployment = context.get("target_deployment")
+        self.problem_id = context.get("problem_id")
+        self.cpu_frequency_worker_node = context.get("cpu_frequency_worker_node")
+        self.problem = context.get("problem")
         self.noise_profile = context.get("noise_profile")
         self.protected_workload = context.get("protected_workload")
         self.duration_seconds = context.get("noise_duration_seconds", DEFAULT_DURATION_SECONDS)
@@ -122,6 +134,29 @@ class NoiseManager:
     def start(self):
         """Start the selected noise profile."""
         if self.running:
+            return
+        if self.noise_profile in (CPU_FREQUENCY_PROFILE, CPU_FREQUENCY_CONTROL_PROFILE):
+            if self._cpu_treatment is not None:
+                cleanup = self._cpu_treatment.evidence.get("cleanup", {})
+                if cleanup.get("status") != "confirmed":
+                    raise RuntimeError("previous CPU frequency treatment has not been confirmed cleaned up")
+                self._cpu_treatment = None
+            if not self.target_namespace or not self.problem_id:
+                raise RuntimeError("CPU frequency treatment requires a problem and namespace")
+            self._cpu_treatment = CpuFrequencyTreatment(
+                self.kubectl,
+                self.target_namespace,
+                self.problem_id,
+                self.cpu_frequency_worker_node,
+                self.problem,
+                control=self.noise_profile == CPU_FREQUENCY_CONTROL_PROFILE,
+            )
+            try:
+                self._evidence = self._cpu_treatment.start()
+            except Exception:
+                self._evidence = self._cpu_treatment.evidence
+                raise
+            self.running = True
             return
         if self.noise_profile in DETERMINISTIC_PROFILES:
             self._ensure_chaos_mesh_installed()
@@ -173,6 +208,11 @@ class NoiseManager:
     def stop(self):
         """Stop the background loop and clean up all active experiments."""
         self.running = False
+        if self.noise_profile in (CPU_FREQUENCY_PROFILE, CPU_FREQUENCY_CONTROL_PROFILE):
+            if self._cpu_treatment is not None:
+                self._evidence = self._cpu_treatment.stop()
+                self._cpu_treatment = None
+            return
         if self.noise_profile in DETERMINISTIC_PROFILES:
             self._record_target_identity_at_cleanup()
             self._evidence["cleanup"] = {"status": "incomplete"}

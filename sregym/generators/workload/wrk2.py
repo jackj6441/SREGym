@@ -23,7 +23,17 @@ class Wrk2:
     Persistent workload generator
     """
 
-    def __init__(self, rate, dist="norm", connections=2, duration=6, threads=2, latency=True, namespace="default"):
+    def __init__(
+        self,
+        rate,
+        dist="norm",
+        connections=2,
+        duration=6,
+        threads=2,
+        latency=True,
+        namespace="default",
+        excluded_node=None,
+    ):
         self.rate = rate
         self.dist = dist
         self.connections = connections
@@ -31,6 +41,7 @@ class Wrk2:
         self.threads = threads
         self.latency = latency
         self.namespace = namespace
+        self.excluded_node = excluded_node
 
         config.load_kube_config()
 
@@ -90,6 +101,24 @@ class Wrk2:
             job_template = yaml.safe_load(f)
 
         job_template["metadata"]["name"] = job_name
+        if self.excluded_node:
+            job_template["spec"]["template"]["spec"]["affinity"] = {
+                "nodeAffinity": {
+                    "requiredDuringSchedulingIgnoredDuringExecution": {
+                        "nodeSelectorTerms": [
+                            {
+                                "matchFields": [
+                                    {
+                                        "key": "metadata.name",
+                                        "operator": "NotIn",
+                                        "values": [self.excluded_node],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            }
         container = job_template["spec"]["template"]["spec"]["containers"][0]
         container["args"] = ["/bin/bash", "/scripts/wrk2-workload.sh"]
 

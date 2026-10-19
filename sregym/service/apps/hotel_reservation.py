@@ -30,6 +30,7 @@ class HotelReservation(Application):
         mount_failure_scripts: bool = True,
         deployment_env_overrides: dict[str, dict[str, dict[str, str]]] | None = None,
         deployment_image_overrides: dict[str, dict[str, str]] | None = None,
+        cpu_frequency_worker_node: str | None = None,
     ):
         super().__init__(HOTEL_RES_METADATA)
         self.kubectl = KubeCtl()
@@ -38,6 +39,7 @@ class HotelReservation(Application):
         self.mount_failure_scripts = mount_failure_scripts
         self.deployment_env_overrides = deployment_env_overrides or {}
         self.deployment_image_overrides = deployment_image_overrides or {}
+        self.cpu_frequency_worker_node = cpu_frequency_worker_node
 
         self.load_app_json()
 
@@ -149,7 +151,8 @@ class HotelReservation(Application):
         avoids a setup rollout and its misleading ReplicaSet history.
         """
         deployment_image_overrides = getattr(self, "deployment_image_overrides", {})
-        if not self.deployment_env_overrides and not deployment_image_overrides:
+        cpu_frequency_worker_node = getattr(self, "cpu_frequency_worker_node", None)
+        if not self.deployment_env_overrides and not deployment_image_overrides and not cpu_frequency_worker_node:
             yield Path(self.k8s_deploy_path)
             return
 
@@ -178,8 +181,32 @@ class HotelReservation(Application):
                     deployment_name = document.get("metadata", {}).get("name")
                     container_overrides = self.deployment_env_overrides.get(deployment_name)
                     image_overrides = deployment_image_overrides.get(deployment_name)
-                    if not container_overrides and not image_overrides:
+                    if not container_overrides and not image_overrides and not cpu_frequency_worker_node:
                         continue
+
+                    if cpu_frequency_worker_node:
+                        pod_spec = document["spec"]["template"]["spec"]
+                        if pod_spec.get("affinity") or pod_spec.get("nodeSelector"):
+                            raise RuntimeError(f"deployment/{deployment_name} already specifies node placement")
+                        operator = "In" if deployment_name == "recommendation" else "NotIn"
+                        pod_spec["affinity"] = {
+                            "nodeAffinity": {
+                                "requiredDuringSchedulingIgnoredDuringExecution": {
+                                    "nodeSelectorTerms": [
+                                        {
+                                            "matchFields": [
+                                                {
+                                                    "key": "metadata.name",
+                                                    "operator": operator,
+                                                    "values": [cpu_frequency_worker_node],
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                        changed = True
 
                     containers = document.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
                     for container in containers:
@@ -277,6 +304,7 @@ class HotelReservation(Application):
                 duration=duration,
                 threads=threads,
                 namespace=self.namespace,
+                excluded_node=self.cpu_frequency_worker_node,
             ),
             payload_script=self.payload_script,
             url="{placeholder}",
